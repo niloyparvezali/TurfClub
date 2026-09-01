@@ -21,6 +21,7 @@ import {
   UserPlus,
   Users,
   X,
+  LockKeyhole,
   Search,
   MapPin,
   Info,
