@@ -7384,3 +7384,197 @@ button, [role="button"], .directory-row { min-height: 44px; }
     padding-right: 11px;
   }
 }
+
+
+/* ============================================================
+   TurfClub Global UI System — production consistency layer
+   Keeps the existing visual identity; normalizes controls and
+   protects modal/overlay scrolling across touch devices.
+   ============================================================ */
+
+:root {
+  --tc-control-icon-size: 42px;
+  --tc-control-icon-compact: 36px;
+  --tc-control-radius: 12px;
+  --tc-control-gap: 8px;
+}
+
+/* Icon-only actions are true squares. */
+.icon-btn,
+.round-primary,
+.admin-access,
+.turf-info-action,
+.turf-edit-btn,
+.cash-advance-screen .cash-advance-edit-btn,
+.detail-back-btn,
+.modal-close {
+  width: var(--tc-control-icon-size);
+  height: var(--tc-control-icon-size);
+  min-width: var(--tc-control-icon-size);
+  min-height: var(--tc-control-icon-size);
+  max-width: var(--tc-control-icon-size);
+  max-height: var(--tc-control-icon-size);
+  flex: 0 0 var(--tc-control-icon-size);
+  padding: 0;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Compact icon actions remain square without distorting dense rows. */
+.icon-btn.mini,
+.edit-paid {
+  width: var(--tc-control-icon-compact);
+  height: var(--tc-control-icon-compact);
+  min-width: var(--tc-control-icon-compact);
+  min-height: var(--tc-control-icon-compact);
+  max-width: var(--tc-control-icon-compact);
+  max-height: var(--tc-control-icon-compact);
+  flex: 0 0 var(--tc-control-icon-compact);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Icon sizing is consistent with the control itself. */
+.icon-btn svg,
+.round-primary svg,
+.admin-access svg,
+.turf-info-action svg,
+.turf-edit-btn svg,
+.cash-advance-screen .cash-advance-edit-btn svg,
+.detail-back-btn svg,
+.modal-close svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.icon-btn.mini svg,
+.edit-paid svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Text actions use content-driven height instead of a global oversized minimum. */
+.primary,
+.danger-button,
+.team-editor-actions button,
+.result-edit-actions button {
+  min-height: 40px;
+  line-height: 1.1;
+  box-sizing: border-box;
+}
+
+/* Preserve full-width actions while keeping them compact and readable. */
+.primary.full {
+  min-height: 42px;
+}
+
+/* Inline clear/search controls are intentionally compact because they live
+   inside fields, not as standalone page actions. */
+.search-clear,
+.match-search-clear,
+.results-search button,
+.cash-detail-search button,
+.due-players-modern .due-players-search > button,
+.turf-search-clear,
+.cash-advance-fullscreen-search > button {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Prevent accidental page/body rubber-banding while a modal owns the scroll. */
+.modal-backdrop {
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+}
+
+.modal {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.match-modal {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.player-selector-screen {
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.player-selector-shell {
+  overscroll-behavior: none;
+  touch-action: pan-y;
+}
+
+.player-selector-list {
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* Never let long text turn an action row into an accidental tall button. */
+.head-action-buttons,
+.match-hero-actions,
+.team-header-actions,
+.row-actions,
+.modal-actions,
+.result-detail-actions,
+.result-edit-actions,
+.cash-advance-card-actions {
+  align-items: center;
+}
+
+.head-action-buttons button,
+.match-hero-actions button,
+.team-header-actions button,
+.row-actions button {
+  line-height: 1;
+}
+
+/* Small screens: keep the same geometry and let content wrap around controls. */
+@media (max-width: 560px) {
+  .page {
+    width: 100%;
+    max-width: 620px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .hero {
+    gap: 10px;
+  }
+
+  .match-hero-actions,
+  .team-header-actions {
+    flex: 0 0 auto;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: min(92dvh, 760px);
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+  }
+
+  .modal-head {
+    gap: 10px;
+    align-items: center;
+  }
+
+  .primary.full {
+    min-height: 44px;
+  }
+}

@@ -1492,6 +1492,7 @@ function Matches({
   };
 
   const removeMatch = async (id) => {
+    if (!isAdmin) return;
     if (!confirm("Delete this match?")) return;
     try {
       await deleteDoc(doc(db, "matches", id));
@@ -1707,6 +1708,7 @@ function Matches({
         <CashOverviewScreen
           data={cashData}
           matches={matches}
+          isAdmin={isAdmin}
           onClose={() => setCashOverviewOpen(false)}
           setAppError={setAppError}
         />
@@ -1714,9 +1716,10 @@ function Matches({
       {scheduleNotice && (
         <div className="schedule-toast" role="status">{scheduleNotice}</div>
       )}
-      {showCreate && (
+      {isAdmin && showCreate && (
         <MatchModal
           players={players}
+          isAdmin={isAdmin}
           onClose={() => setShowCreate(false)}
           setAppError={setAppError}
           onDone={(saved) => {
@@ -1725,9 +1728,10 @@ function Matches({
           }}
         />
       )}
-      {editMatch && (
+      {isAdmin && editMatch && (
         <MatchModal
           players={players}
+          isAdmin={isAdmin}
           match={editMatch}
           onClose={() => setEditMatch(null)}
           setAppError={setAppError}
@@ -2052,7 +2056,7 @@ function PlayerLedger({
   }, [cur.paid, editing]);
 
   const save = async () => {
-    if (savingRef.current) return;
+    if (!isAdmin || savingRef.current) return;
     const normalized = normalizeNumericInput(value);
     const numericValue = Number(normalized || 0);
     if (!Number.isFinite(numericValue) || numericValue < 0 || !/^\d+(?:\.\d{1,3})?$/.test(normalized || "0")) {
@@ -2466,6 +2470,7 @@ function TurfInformationPage({ profile, setAppError, onClose }) {
       {formOpen && isAdmin && (
         <TurfForm
           turf={editingTurf}
+          isAdmin={isAdmin}
           onClose={closeForm}
           setAppError={setAppError}
           onSaved={closeForm}
@@ -2526,7 +2531,7 @@ function TurfCard({ turf, isAdmin, onEdit }) {
   );
 }
 
-function TurfForm({ turf, onClose, onSaved, setAppError }) {
+function TurfForm({ turf, isAdmin = false, onClose, onSaved, setAppError }) {
   const editing = Boolean(turf?.id);
   const [name, setName] = useState(String(turf?.name || ""));
   const [contractNumber, setContractNumber] = useState(String(turf?.contractNumber || ""));
@@ -2538,7 +2543,7 @@ function TurfForm({ turf, onClose, onSaved, setAppError }) {
 
   const submit = async (event) => {
     event.preventDefault();
-    if (busy) return;
+    if (!isAdmin || busy) return;
     const cleanName = name.trim();
     const cleanContract = contractNumber.trim();
     const cleanNote = note.slice(0, 100).trim();
@@ -2594,7 +2599,7 @@ function TurfForm({ turf, onClose, onSaved, setAppError }) {
   };
 
   const remove = async () => {
-    if (!editing || busy) return;
+    if (!isAdmin || !editing || busy) return;
     if (!confirm(`Delete ${name.trim() || "this turf"}?`)) return;
     setBusy(true);
     try {
@@ -2845,7 +2850,7 @@ function ReminderModal({ match, onClose }) {
   );
 }
 
-function MatchModal({ players, match, onClose, setAppError, onDone }) {
+function MatchModal({ players, match, isAdmin = false, onClose, setAppError, onDone }) {
   useBodyScrollLock(true);
   useEscapeHandler(true, onClose);
 
@@ -2981,7 +2986,7 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
 
   const submit = async (event) => {
     event?.preventDefault?.();
-    if (busy) return;
+    if (!isAdmin || busy) return;
     setError("");
 
     const normalizedAmount = normalizeNumericInput(amount);
@@ -3603,7 +3608,7 @@ function ResultDetailModal({ match, players, isAdmin, onClose, setAppError }) {
   const draftTeamBScore = teamBIds.reduce((sum, id) => sum + Number(goals[id] || 0), 0);
 
   const saveResult = async () => {
-    if (busy) return;
+    if (!isAdmin || busy) return;
     const allowedIds = new Set([...teamAIds, ...teamBIds]);
     const normalized = Object.fromEntries(
       Object.entries(goals)
@@ -3888,7 +3893,7 @@ function Players({ players, matches, profile, setAppError, onOpenPlayer }) {
   );
 
   const add = async () => {
-    if (!newName.trim()) return;
+    if (!isAdmin || !newName.trim()) return;
     try {
       await addDoc(collection(db, "players"), {
         name: newName.trim(),
@@ -3914,7 +3919,7 @@ function Players({ players, matches, profile, setAppError, onOpenPlayer }) {
   };
 
   const rename = async (id) => {
-    if (!editingName.trim()) return;
+    if (!isAdmin || !editingName.trim()) return;
     try {
       await updateDoc(doc(db, "players", id), {
         name: editingName.trim(),
@@ -3928,6 +3933,7 @@ function Players({ players, matches, profile, setAppError, onOpenPlayer }) {
   };
 
   const remove = async (id) => {
+    if (!isAdmin) return;
     const player = players.find((item) => item.id === id);
     if (!player) return;
     if (!confirm(`Remove ${player.name}? Their goals, matches, payments and all historical records will be kept.`)) return;
@@ -3943,6 +3949,7 @@ function Players({ players, matches, profile, setAppError, onOpenPlayer }) {
   };
 
   const restore = async (id) => {
+    if (!isAdmin) return;
     try {
       await updateDoc(doc(db, "players", id), {
         active: true,
@@ -5424,7 +5431,7 @@ function MatchAdvancePreview({ records = [], onOpen }) {
   );
 }
 
-function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
+function MatchAdvanceForm({ matches, isAdmin = false, initialMatch, onClose, setAppError }) {
   useBodyScrollLock(true);
   const isEditingAdvance = Boolean(initialMatch?.id);
   const orderedMatches = useMemo(() => getMatchOrder(Array.isArray(matches) ? matches : []), [matches]);
@@ -5496,7 +5503,7 @@ function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
 
   const save = async (e) => {
     e.preventDefault();
-    if (busy || !selectedMatch) return;
+    if (!isAdmin || busy || !selectedMatch) return;
     const value = Number(amount);
     if (!Number.isFinite(value) || value < 0) return setError("Enter a valid advance amount.");
     if (note.length > 40) return setError("Source / note must be 40 characters or fewer.");
@@ -5666,7 +5673,7 @@ function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
   );
 }
 
-function MatchAdvanceScreen({ matches, onBack, setAppError, initialFilter = "all" }) {
+function MatchAdvanceScreen({ matches, isAdmin = false, onBack, setAppError, initialFilter = "all" }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState(initialFilter);
   const [editing, setEditing] = useState(null);
@@ -5835,15 +5842,17 @@ function MatchAdvanceScreen({ matches, onBack, setAppError, initialFilter = "all
                             ? "COMPLETED"
                             : "UPCOMING"}
                       </span>
-                      <button
-                        type="button"
-                        className="cash-advance-edit-btn"
-                        onClick={() => setEditing(row.match)}
-                        aria-label={`Edit match ${row.matchNumber} advance`}
-                        title="Edit advance"
-                      >
-                        <Pencil size={15} aria-hidden="true" />
-                      </button>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="cash-advance-edit-btn"
+                          onClick={() => setEditing(row.match)}
+                          aria-label={`Edit match ${row.matchNumber} advance`}
+                          title="Edit advance"
+                        >
+                          <Pencil size={15} aria-hidden="true" />
+                        </button>
+                      )}
                     </div>
                   </article>
                 );
@@ -5875,6 +5884,7 @@ function MatchAdvanceScreen({ matches, onBack, setAppError, initialFilter = "all
         {editing ? (
           <MatchAdvanceForm
             matches={matches}
+            isAdmin={isAdmin}
             initialMatch={editing}
             onClose={() => setEditing(null)}
             setAppError={setAppError}
@@ -6065,14 +6075,14 @@ function DuePlayersScreen({ duePlayers, onBack }) {
   );
 }
 
-function CashOverviewScreen({ data, matches, onClose, setAppError }) {
+function CashOverviewScreen({ data, matches, isAdmin = false, onClose, setAppError }) {
   const [screen, setScreen] = useState("summary");
   const matchAdvances = useMemo(() => getMatchAdvanceRecords(matches), [matches]);
   useEscapeHandler(screen === "summary", onClose);
   useBodyScrollLock(true);
-  if (screen === "advance") return <MatchAdvanceScreen matches={matches} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="all" />;
-  if (screen === "upcoming") return <MatchAdvanceScreen matches={matches} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="upcoming" />;
-  if (screen === "completed") return <MatchAdvanceScreen matches={matches} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="completed" />;
+  if (screen === "advance") return <MatchAdvanceScreen matches={matches} isAdmin={isAdmin} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="all" />;
+  if (screen === "upcoming") return <MatchAdvanceScreen matches={matches} isAdmin={isAdmin} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="upcoming" />;
+  if (screen === "completed") return <MatchAdvanceScreen matches={matches} isAdmin={isAdmin} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="completed" />;
   if (screen === "due") return <DuePlayersScreen duePlayers={data.duePlayers} onBack={() => setScreen("summary")} />;
   if (screen === "collection" || screen === "cost") return <CashAuditScreen data={data} auditType={screen} onBack={() => setScreen("summary")} backLabel="Back to cash overview" />;
   return (
