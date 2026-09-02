@@ -86,20 +86,77 @@ export function isPlayerSelected(match, playerId) {
  * to the first selected players in the persisted participant order. This
  * guarantees that all player shares sum EXACTLY to totalMatchCost.
  */
-export function calculatePlayerMatchFee(match, playerId) {
-  if (!match || match.deleted) return 0;
+function participantFeeOverrideMinor(participant, totalMinor) {
+  if (!participant || participant.feeOverride === null || participant.feeOverride === undefined || participant.feeOverride === "") {
+    return null;
+  }
+
+  const override = decimalToMinor(participant.feeOverride);
+  if (!Number.isSafeInteger(override) || override < 0 || override > totalMinor) return null;
+  return override;
+}
+
+/**
+ * Calculate every participating player's fee in minor units.
+ *
+ * Custom `feeOverride` values are match-participant scoped. They are treated
+ * as fixed shares first; every participant without an override shares the
+ * exact remaining amount. The remainder is distributed in persisted
+ * participant order so the final sum always equals the match total exactly.
+ *
+ * Invalid/inconsistent historical override data is ignored and the engine
+ * safely falls back to the automatic equal allocation for that match.
+ */
+export function calculatePlayerMatchFees(match) {
+  if (!match || match.deleted) return new Map();
 
   const ids = uniqueParticipantIds(match);
-  const playerIndex = ids.indexOf(String(playerId ?? "").trim());
-  if (playerIndex < 0 || ids.length === 0) return 0;
+  if (!ids.length) return new Map();
 
   const totalMinor = totalMatchCostMinor(match);
-  if (totalMinor <= 0) return 0;
+  if (totalMinor <= 0) return new Map(ids.map((id) => [id, 0]));
 
-  const baseShare = Math.floor(totalMinor / ids.length);
-  const remainder = totalMinor % ids.length;
+  const participants = Array.isArray(match.participants) ? match.participants : [];
+  const byId = new Map(
+    participants.map((participant) => [String(participant?.playerId ?? "").trim(), participant]),
+  );
+  const overrides = new Map();
+  let fixedTotal = 0;
 
-  return baseShare + (playerIndex < remainder ? 1 : 0);
+  for (const id of ids) {
+    const override = participantFeeOverrideMinor(byId.get(id), totalMinor);
+    if (override === null) continue;
+    overrides.set(id, override);
+    fixedTotal += override;
+  }
+
+  // A saved document should never reach this state because the admin editor
+  // validates it before writing. Falling back keeps reads safe for old/manual
+  // documents without ever producing a sum larger than the match total.
+  if (fixedTotal > totalMinor || (overrides.size === ids.length && fixedTotal !== totalMinor)) {
+    overrides.clear();
+    fixedTotal = 0;
+  }
+
+  const automaticIds = ids.filter((id) => !overrides.has(id));
+  const result = new Map(overrides);
+
+  if (!automaticIds.length) return result;
+
+  const remainingMinor = totalMinor - fixedTotal;
+  const baseShare = Math.floor(remainingMinor / automaticIds.length);
+  const remainder = remainingMinor % automaticIds.length;
+
+  automaticIds.forEach((id, index) => {
+    result.set(id, baseShare + (index < remainder ? 1 : 0));
+  });
+
+  return result;
+}
+
+export function calculatePlayerMatchFee(match, playerId) {
+  if (!match || match.deleted) return 0;
+  return calculatePlayerMatchFees(match).get(String(playerId ?? "").trim()) || 0;
 }
 
 /**

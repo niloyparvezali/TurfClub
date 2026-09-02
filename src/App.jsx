@@ -21,15 +21,16 @@ import {
   Goal,
   UserPlus,
   Users,
+  Wallet,
   X,
   Search,
   MapPin,
+  LockKeyhole,
   Info,
   Download,
-  LockKeyhole,
 } from "lucide-react";
 import { auth, db, firebaseMissingConfig } from "./firebase";
-import { formatMoney, calculatePlayerMatchFee, calculatePlayerMatchPayment, calculatePlayerMatchFinancials, calculatePlayerBalance, getPlayerFinancials } from "./financial";
+import { formatMoney, calculatePlayerMatchFee, calculatePlayerMatchPayment, calculatePlayerMatchFinancials, calculatePlayerBalance, getPlayerFinancials, calculatePlayerMatchFees, toMoneyMinor } from "./financial";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -982,6 +983,7 @@ function App() {
   const [appError, setAppError] = useState("");
   const [authReady, setAuthReady] = useState(false);
   const [dataReady, setDataReady] = useState(false);
+  const [turfInformationOpen, setTurfInformationOpen] = useState(false);
 
   useEffect(() => {
     if (firebaseMissingConfig.length) {
@@ -1076,6 +1078,7 @@ function App() {
     setPlayerLedgerMatchId(null);
     setPlayerDetailId(null);
     setShowAdminLogin(false);
+    setTurfInformationOpen(false);
     setTab(nextTab);
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   };
@@ -1146,7 +1149,13 @@ function App() {
           </button>
         </div>
       )}
-      {topScorersOpen ? (
+      {turfInformationOpen ? (
+        <TurfInformationPage
+          profile={activeProfile}
+          setAppError={setAppError}
+          onClose={() => setTurfInformationOpen(false)}
+        />
+      ) : topScorersOpen ? (
         <TopScorersPage
           players={players}
           matches={matches}
@@ -1187,6 +1196,7 @@ function App() {
               selectedMatchId={selectedMatchId}
               setSelectedMatchId={setSelectedMatchId}
               onOpenPlayerLedger={setPlayerLedgerMatchId}
+              onOpenTurfInformation={() => setTurfInformationOpen(true)}
             />
           )}
           {tab === "results" && (
@@ -1399,6 +1409,7 @@ function Matches({
   selectedMatchId,
   setSelectedMatchId,
   onOpenPlayerLedger,
+  onOpenTurfInformation,
 }) {
   const isAdmin = profile.role === "admin";
   // Match numbers are permanent chronological positions: earliest match is #1,
@@ -1506,6 +1517,15 @@ function Matches({
           </p>
         </div>
         <div className="match-hero-actions">
+          <button
+            type="button"
+            className="turf-info-action"
+            onClick={onOpenTurfInformation}
+            title="Turf Information"
+            aria-label="Turf Information"
+          >
+            <MapPin size={15} />
+          </button>
           <button
             type="button"
             className="schedule-action"
@@ -2159,7 +2179,7 @@ function PlayerLedger({
               disabled={busy}
             />
           ) : (
-            <b>{isCalculationActive ? money(cur.totalApplied) : "—"}</b>
+            <b>{isCalculationActive ? money(cur.cashPaid) : "—"}</b>
           )}
         </div>
       </div>
@@ -2289,6 +2309,354 @@ function buildReminderMessage(match, now = new Date()) {
     ...status,
     text: lines.join("\n"),
   };
+}
+
+
+function normalizeTurfSearch(value) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isValidGoogleMapsUrl(value) {
+  try {
+    const url = new URL(String(value).trim());
+    if (url.protocol !== "https:") return false;
+
+    const host = url.hostname.toLowerCase();
+    if (host === "maps.app.goo.gl") return true;
+    if (host === "maps.google.com") return true;
+    if (host === "www.google.com") return url.pathname.toLowerCase().startsWith("/maps");
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function TurfInformationPage({ profile, setAppError, onClose }) {
+  const isAdmin = profile.role === "admin";
+  const [turfs, setTurfs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [query, setQuery] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingTurf, setEditingTurf] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setLoadError("");
+    const unsubscribe = onSnapshot(
+      collection(db, "turfs"),
+      (snap) => {
+        const next = snap.docs
+          .map((item) => ({ id: item.id, ...item.data() }))
+          .sort((a, b) => {
+            const aMs = turfUpdatedAtMs(a);
+            const bMs = turfUpdatedAtMs(b);
+            if (bMs !== aMs) return bMs - aMs;
+            return String(a.name || "").localeCompare(String(b.name || ""));
+          });
+        setTurfs(next);
+        setLoading(false);
+      },
+      () => {
+        setLoadError("Unable to load turf information.");
+        setLoading(false);
+      },
+    );
+    return () => unsubscribe();
+  }, []);
+
+  useEscapeHandler(Boolean(formOpen), () => {
+    setFormOpen(false);
+    setEditingTurf(null);
+  });
+
+  const normalizedQuery = normalizeTurfSearch(query);
+  const filteredTurfs = useMemo(() => {
+    if (!normalizedQuery) return turfs;
+    return turfs.filter((turf) => normalizeTurfSearch(turf.name).includes(normalizedQuery));
+  }, [turfs, normalizedQuery]);
+
+  const openAdd = () => {
+    setEditingTurf(null);
+    setFormOpen(true);
+  };
+
+  const openEdit = (turf) => {
+    setEditingTurf(turf);
+    setFormOpen(true);
+  };
+
+  const closeForm = () => {
+    setFormOpen(false);
+    setEditingTurf(null);
+  };
+
+  return (
+    <section className="page turf-directory-page">
+      <div className="turf-directory-top">
+        <button type="button" className="detail-back-btn" onClick={onClose} aria-label="Back to Match Centre" title="Back to Match Centre">
+          <ChevronLeft size={20} />
+        </button>
+        <div className="turf-directory-heading">
+          <div className="eyebrow turf-eyebrow">TURF INFORMATION</div>
+          <h2>Turf directory</h2>
+          <p>{turfs.length} {turfs.length === 1 ? "turf" : "turfs"}{normalizedQuery ? ` · ${filteredTurfs.length} found` : ""}</p>
+        </div>
+      </div>
+
+      <div className="turf-directory-actions">
+        <div className="turf-search">
+          <Search size={16} />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search turf name..."
+            aria-label="Search turf name"
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} aria-label="Clear search" className="turf-search-clear">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        {isAdmin && (
+          <button type="button" className="primary turf-add-btn" onClick={openAdd}>
+            <Plus size={16} />
+            Add turf
+          </button>
+        )}
+      </div>
+
+      {loadError ? (
+        <div className="turf-state error-state">{loadError}</div>
+      ) : loading ? (
+        <div className="turf-state">Loading turfs...</div>
+      ) : filteredTurfs.length ? (
+        <div className="turf-list">
+          {filteredTurfs.map((turf) => (
+            <TurfCard key={turf.id} turf={turf} isAdmin={isAdmin} onEdit={() => openEdit(turf)} />
+          ))}
+        </div>
+      ) : normalizedQuery ? (
+        <div className="turf-state turf-empty">
+          <MapPin size={22} />
+          <strong>NO TURF FOUND</strong>
+          <span>No turf matches “{query.trim()}”.</span>
+        </div>
+      ) : (
+        <div className="turf-state turf-empty">
+          <MapPin size={22} />
+          <strong>Turf directory is empty</strong>
+          <span>No turf information added yet.</span>
+          {isAdmin && (
+            <button type="button" className="primary turf-empty-action" onClick={openAdd}>
+              <Plus size={16} />
+              Add turf
+            </button>
+          )}
+        </div>
+      )}
+
+      {formOpen && isAdmin && (
+        <TurfForm
+          turf={editingTurf}
+          onClose={closeForm}
+          setAppError={setAppError}
+          onSaved={closeForm}
+        />
+      )}
+    </section>
+  );
+}
+
+function turfUpdatedAtMs(turf) {
+  const value = turf?.updatedAt || turf?.createdAt;
+  if (!value) return 0;
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function TurfCard({ turf, isAdmin, onEdit }) {
+  const mapUrl = String(turf?.googleMapsLink || "").trim();
+  const slotFee = turf?.slotFee === "" || turf?.slotFee == null ? "" : money(Number(turf.slotFee) || 0).replace(/^৳/, "");
+  const extraNote = String(turf?.extraNote ?? turf?.note ?? "").trim();
+  return (
+    <article className="turf-card">
+      <div className="turf-card-head">
+        <h3>{String(turf?.name || "Unnamed Turf").trim() || "Unnamed Turf"}</h3>
+      </div>
+      <div className="turf-card-stats">
+        <div>
+          <span>CONTRACT</span>
+          <b title={turf?.contractNumber || "—"}>{turf?.contractNumber || "—"}</b>
+        </div>
+        <div>
+          <span>SLOT FEE</span>
+          <b>{slotFee !== "" ? `৳${slotFee}` : "—"}</b>
+        </div>
+      </div>
+      {extraNote && (
+        <div className="turf-note" title={extraNote}>
+          <ClipboardList size={14} />
+          <span>{extraNote}</span>
+        </div>
+      )}
+      <div className="turf-card-actions">
+        {isValidGoogleMapsUrl(mapUrl) ? (
+          <a className="turf-map-btn" href={mapUrl} target="_blank" rel="noopener noreferrer">
+            <MapPin size={14} />
+            View on Map
+          </a>
+        ) : <span />}
+        {isAdmin && (
+          <button type="button" className="icon-btn light turf-edit-btn" onClick={onEdit} aria-label={`Edit ${turf?.name || "turf"}`} title="Edit turf">
+            <Pencil size={16} />
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function TurfForm({ turf, onClose, onSaved, setAppError }) {
+  const editing = Boolean(turf?.id);
+  const [name, setName] = useState(String(turf?.name || ""));
+  const [contractNumber, setContractNumber] = useState(String(turf?.contractNumber || ""));
+  const [slotFee, setSlotFee] = useState(turf?.slotFee == null ? "" : String(turf.slotFee));
+  const [note, setNote] = useState(String(turf?.extraNote ?? turf?.note ?? "").slice(0, 100));
+  const [googleMapsLink, setGoogleMapsLink] = useState(String(turf?.googleMapsLink || ""));
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const cleanName = name.trim();
+    const cleanContract = contractNumber.trim();
+    const cleanNote = note.slice(0, 100).trim();
+    const cleanUrl = googleMapsLink.trim();
+    const validMoney = slotFee === "" || /^\d+(?:\.\d{1,3})?$/.test(slotFee.trim());
+
+    if (!cleanName) return setError("Enter a turf name.");
+    if (!cleanContract) return setError("Enter a contract number.");
+    if (!validMoney || (slotFee !== "" && (!Number.isFinite(Number(slotFee)) || Number(slotFee) < 0))) {
+      return setError("Enter a valid slot fee.");
+    }
+    if (cleanUrl && !isValidGoogleMapsUrl(cleanUrl)) {
+      return setError("Enter a valid HTTPS Google Maps link.");
+    }
+
+    setBusy(true);
+    setError("");
+    const payload = {
+      name: cleanName,
+      contractNumber: cleanContract,
+      slotFee: slotFee === "" ? null : Number(slotFee),
+      extraNote: cleanNote,
+      googleMapsLink: cleanUrl,
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      if (editing) {
+        await updateDoc(doc(db, "turfs", turf.id), payload);
+      } else {
+        await addDoc(collection(db, "turfs"), {
+          ...payload,
+          createdAt: serverTimestamp(),
+        });
+      }
+      onSaved();
+    } catch (err) {
+      const code = String(err?.code || "");
+      const message =
+        code === "permission-denied"
+          ? "You do not have permission to save turf information."
+          : code === "failed-precondition"
+            ? "Firestore is not ready for turf information. Check the Firestore database configuration."
+            : code === "unavailable"
+              ? "Firestore is temporarily unavailable. Please try again."
+              : "Could not save turf information.";
+      setError(message);
+      setAppError?.(message);
+      console.error("Turf information save failed:", err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!editing || busy) return;
+    if (!confirm(`Delete ${name.trim() || "this turf"}?`)) return;
+    setBusy(true);
+    try {
+      await deleteDoc(doc(db, "turfs", turf.id));
+      onSaved();
+    } catch (err) {
+      setError("Could not delete turf information.");
+      setAppError?.("Could not delete turf information.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <OverlayPortal>
+      <div className="modal-backdrop turf-form-backdrop">
+        <form className="modal turf-form-modal" onSubmit={submit}>
+          <div className="modal-head">
+            <div>
+              <span className="eyebrow turf-eyebrow">{editing ? "EDIT TURF" : "NEW TURF"}</span>
+              <h2>{editing ? "Edit turf" : "Add turf"}</h2>
+            </div>
+            <button type="button" className="modal-close" onClick={onClose} aria-label="Close turf form">
+              <X size={19} />
+            </button>
+          </div>
+
+          <label>
+            TURF NAME
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Bason Turf" maxLength={80} autoFocus />
+          </label>
+          <label>
+            CONTRACT NUMBER
+            <input value={contractNumber} onChange={(e) => setContractNumber(e.target.value)} placeholder="TC-2026-001" maxLength={50} />
+          </label>
+          <label>
+            SLOT FEE
+            <input value={slotFee} onChange={(e) => setSlotFee(e.target.value)} inputMode="decimal" placeholder="1500" maxLength={20} />
+          </label>
+          <label>
+            NOTE
+            <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 100))} maxLength={100} rows={3} placeholder="Optional note" />
+            <small className="turf-note-counter">{note.length}/100</small>
+          </label>
+          <label>
+            GOOGLE MAPS LINK
+            <input value={googleMapsLink} onChange={(e) => setGoogleMapsLink(e.target.value)} placeholder="https://maps.google.com/..." inputMode="url" autoComplete="off" />
+          </label>
+          {error && <div className="error">{error}</div>}
+          <div className="turf-form-actions">
+            {editing && (
+              <button type="button" className="icon-btn danger turf-delete-btn" onClick={remove} disabled={busy} title="Delete turf" aria-label="Delete turf">
+                <Trash2 size={17} />
+              </button>
+            )}
+            <button type="submit" className="primary full" disabled={busy}>
+              {busy ? "Saving..." : editing ? "Save changes" : "Save turf"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </OverlayPortal>
+  );
 }
 
 function UpcomingScheduleImageModal({ matches, onClose, onNotice }) {
@@ -2482,6 +2850,14 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
   useEscapeHandler(true, onClose);
 
   const editing = !!match;
+  const oldParticipants = Array.isArray(match?.participants) ? match.participants : [];
+  const oldParticipantById = new Map(oldParticipants.map((p) => [String(p?.playerId || ""), p]));
+  const existingAdditionalCost = Number(match?.additionalCost ?? 0);
+  const existingTotalAmount = Number(match?.totalAmount ?? 0);
+  const initialBaseAmount = Number.isFinite(existingAdditionalCost)
+    ? Math.max(0, existingTotalAmount - Math.max(0, existingAdditionalCost))
+    : existingTotalAmount;
+
   const [date, setDate] = useState(match?.date || today());
   const [startTime, setStartTime] = useState(
     match?.startTime || match?.time || currentTime(),
@@ -2490,65 +2866,216 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
     match?.endTime ||
     addOneHour(match?.startTime || match?.time || currentTime()),
   );
-  const [amount, setAmount] = useState(String(match?.totalAmount ?? 0));
+  const [amount, setAmount] = useState(String(initialBaseAmount || 0));
+  const [additionalCost, setAdditionalCost] = useState(
+    String(Math.max(0, existingAdditionalCost || 0)),
+  );
   const [teamAName, setTeamAName] = useState(match?.teamAName || "Team A");
   const [teamBName, setTeamBName] = useState(match?.teamBName || "Team B");
   const [location, setLocation] = useState(match?.location || "");
   const [selected, setSelected] = useState(
-    match?.participants?.map((p) => p.playerId) || [],
+    [...new Set(oldParticipants.map((p) => String(p?.playerId || "").trim()).filter(Boolean))],
   );
+  const [feeOverrides, setFeeOverrides] = useState(() =>
+    Object.fromEntries(
+      oldParticipants
+        .filter((p) => p?.feeOverride !== null && p?.feeOverride !== undefined && p?.feeOverride !== "")
+        .map((p) => [p.playerId, String(p.feeOverride)]),
+    ),
+  );
+  const [playerSelectorOpen, setPlayerSelectorOpen] = useState(false);
+  const [playerSearch, setPlayerSearch] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEscapeHandler(playerSelectorOpen, () => {
+    setPlayerSelectorOpen(false);
+    setPlayerSearch("");
+  });
+
+  const availablePlayers = useMemo(
+    () => sortPlayersByName(
+      players.filter((p) => isPlayerActive(p) || selected.includes(p.id)),
+    ),
+    [players, selected],
+  );
+
+  const filteredPlayers = useMemo(() => {
+    const query = normalizeMatchSearchText(playerSearch);
+    if (!query) return availablePlayers;
+    const tokens = query.split(/\s+/).filter(Boolean);
+    return availablePlayers.filter((player) => {
+      const name = normalizeMatchSearchText(player?.name);
+      return name.includes(query) || tokens.every((token) => name.includes(token));
+    });
+  }, [availablePlayers, playerSearch]);
+
   const toggle = (id) =>
-    setSelected((s) =>
-      s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
-    );
+    setSelected((current) => {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) return current;
+      if (current.includes(normalizedId)) {
+        setFeeOverrides((overrides) => {
+          const next = { ...overrides };
+          delete next[normalizedId];
+          return next;
+        });
+        return current.filter((x) => x !== normalizedId);
+      }
+      return [...new Set([...current, normalizedId])];
+    });
+
+  const setAutomatic = (id) =>
+    setFeeOverrides((overrides) => {
+      const next = { ...overrides };
+      delete next[id];
+      return next;
+    });
+
+  const setCustom = (id) =>
+    setFeeOverrides((overrides) => ({
+      ...overrides,
+      [id]: overrides[id] ?? "",
+    }));
+
+  const updateCustomFee = (id, value) =>
+    setFeeOverrides((overrides) => ({
+      ...overrides,
+      [id]: normalizeNumericInput(value),
+    }));
+
+  const baseAmountMinorPreview = toMoneyMinor(amount);
+  const additionalCostMinorPreview = toMoneyMinor(additionalCost);
+  const totalMinorPreview = baseAmountMinorPreview + additionalCostMinorPreview;
+  const numericTotalPreview = totalMinorPreview / 1000;
+  const automaticCount = selected.filter((id) => feeOverrides[id] === undefined).length;
+
+  const previewMatch = useMemo(
+    () => ({
+      id: match?.id || "preview",
+      totalAmount: numericTotalPreview,
+      participants: selected.map((playerId) => ({
+        playerId,
+        paid: oldParticipantById.get(playerId)?.paid || 0,
+        ...(feeOverrides[playerId] !== undefined
+          ? { feeOverride: feeOverrides[playerId] }
+          : {}),
+      })),
+    }),
+    [feeOverrides, match?.id, numericTotalPreview, oldParticipantById, selected],
+  );
+
+  const calculatedFees = useMemo(
+    () => calculatePlayerMatchFees(previewMatch),
+    [previewMatch],
+  );
+
+  const customFeeTotalMinor = useMemo(
+    () => Object.entries(feeOverrides).reduce(
+      (sum, [playerId, value]) =>
+        selected.includes(playerId) ? sum + toMoneyMinor(value) : sum,
+      0,
+    ),
+    [feeOverrides, selected],
+  );
 
   const submit = async (event) => {
     event?.preventDefault?.();
     if (busy) return;
     setError("");
-    const numericAmount = Number(amount);
-    const validMoney = /^\d+(?:\.\d{1,3})?$/.test(String(amount).trim());
+
+    const normalizedAmount = normalizeNumericInput(amount);
+    const normalizedAdditionalCost = normalizeNumericInput(additionalCost || "0");
+    const numericAmount = Number(normalizedAmount);
+    const numericAdditionalCost = Number(normalizedAdditionalCost || 0);
+    const numericTotal = numericAmount + numericAdditionalCost;
+    const validMoney = /^\d+(?:\.\d{1,3})?$/.test(String(normalizedAmount).trim());
+    const validAdditionalMoney = /^\d+(?:\.\d{1,3})?$/.test(String(normalizedAdditionalCost || "0").trim());
     const validDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date));
     const validTime = (value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value));
-    if (!validDate || !validTime(startTime) || !validTime(endTime) || !validMoney || !Number.isFinite(numericAmount) || numericAmount <= 0 || selected.length === 0) {
-      return setError("Enter a valid date, time, positive amount (up to 3 decimals), and at least one player.");
+
+    if (
+      !validDate ||
+      !validTime(startTime) ||
+      !validTime(endTime) ||
+      !validMoney ||
+      !validAdditionalMoney ||
+      !Number.isFinite(numericAmount) ||
+      !Number.isFinite(numericAdditionalCost) ||
+      !Number.isFinite(numericTotal) ||
+      numericAmount <= 0 ||
+      numericAdditionalCost < 0 ||
+      numericTotal <= 0 ||
+      selected.length === 0
+    ) {
+      return setError("Enter a valid date, time, positive amount, and at least one player.");
     }
-    const old = Array.isArray(match?.participants) ? match.participants : [];
-    const participants = [...new Set(selected)].map((id) => ({
-      playerId: id,
-      paid: Math.max(0, Number(old.find((p) => p.playerId === id)?.paid || 0)),
-    }));
+
+    const totalMinorPreview = toMoneyMinor(numericTotal);
+    const participantRows = [...new Set(selected)].map((id) => {
+      const old = oldParticipantById.get(id);
+      const custom = feeOverrides[id];
+      return {
+        playerId: id,
+        paid: Math.max(0, Number(old?.paid || 0)),
+        ...(custom !== undefined ? { feeOverride: custom } : {}),
+      };
+    });
+
+    let fixedCustomMinor = 0;
+    for (const participant of participantRows) {
+      if (participant.feeOverride === undefined) continue;
+      const raw = String(participant.feeOverride).trim();
+      if (!/^\d+(?:\.\d{1,3})?$/.test(raw)) {
+        return setError("Enter valid custom player fees with up to 3 decimals.");
+      }
+      const feeMinor = toMoneyMinor(raw);
+      if (feeMinor < 0 || feeMinor > totalMinorPreview) {
+        return setError("Custom player fees must be between ৳0 and the total match amount.");
+      }
+      fixedCustomMinor += feeMinor;
+    }
+
+    if (fixedCustomMinor > totalMinorPreview) {
+      return setError("Custom player fees cannot exceed the total match amount.");
+    }
+    if (automaticCount === 0 && fixedCustomMinor !== totalMinorPreview) {
+      return setError("All players use custom fees, so their total must exactly equal the match amount.");
+    }
+
+    const candidateMatch = {
+      id: match?.id || "new",
+      totalAmount: numericTotal,
+      participants: participantRows,
+    };
+    const allocated = calculatePlayerMatchFees(candidateMatch);
+    const allocatedTotalMinor = [...allocated.values()].reduce((sum, fee) => sum + fee, 0);
+    if (allocated.size !== participantRows.length || allocatedTotalMinor !== totalMinorPreview) {
+      return setError("Could not allocate the match amount exactly across the selected players.");
+    }
+
     setBusy(true);
     try {
+      const payload = {
+        date,
+        startTime,
+        endTime,
+        time: startTime,
+        totalAmount: numericTotal,
+        additionalCost: numericAdditionalCost,
+        teamAName: teamAName.trim() || "Team A",
+        teamBName: teamBName.trim() || "Team B",
+        location: location.trim(),
+        participants: participantRows,
+        updatedAt: serverTimestamp(),
+      };
       if (editing) {
-        await updateDoc(doc(db, "matches", match.id), {
-          date,
-          startTime,
-          endTime,
-          time: startTime,
-          totalAmount: numericAmount,
-          teamAName: teamAName.trim() || "Team A",
-          teamBName: teamBName.trim() || "Team B",
-          location: location.trim(),
-          participants,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, "matches", match.id), payload);
         onDone({ id: match.id, date });
       } else {
         const ref = await addDoc(collection(db, "matches"), {
-          date,
-          startTime,
-          endTime,
-          time: startTime,
-          totalAmount: numericAmount,
-          teamAName: teamAName.trim() || "Team A",
-          teamBName: teamBName.trim() || "Team B",
-          location: location.trim(),
-          participants,
+          ...payload,
           createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
         });
         onDone({ id: ref.id, date });
       }
@@ -2559,6 +3086,11 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const closePlayerSelector = () => {
+    setPlayerSelectorOpen(false);
+    setPlayerSearch("");
   };
 
   return (
@@ -2572,118 +3104,229 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
               </span>
               <h2>{editing ? "Update match" : "Create match"}</h2>
             </div>
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close admin login">
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close match editor">
               <X />
             </button>
           </div>
-          <div className="form-grid-two">
-            <label>
-              Match date
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-              />
-            </label>
+
+          <label>
+            Match date
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+
+          <div className="match-inline-fields match-time-fields">
             <label>
               Start time
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-              />
+              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            </label>
+            <span className="match-inline-separator" aria-hidden="true">TO</span>
+            <label>
+              End time
+              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
             </label>
           </div>
+
           <label>
-            End time
-            <input
-              type="time"
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-            />
+            Team A name
+            <input type="text" value={teamAName} onChange={(e) => setTeamAName(e.target.value)} maxLength={40} placeholder="Team A" />
           </label>
-          <div className="form-grid-two">
-            <label>
-              Team A name
-              <input
-                type="text"
-                value={teamAName}
-                onChange={(e) => setTeamAName(e.target.value)}
-                maxLength={40}
-                placeholder="Team A"
-              />
-            </label>
-            <label>
-              Team B name
-              <input
-                type="text"
-                value={teamBName}
-                onChange={(e) => setTeamBName(e.target.value)}
-                maxLength={40}
-                placeholder="Team B"
-              />
-            </label>
-          </div>
+
+          <label>
+            Team B name
+            <input type="text" value={teamBName} onChange={(e) => setTeamBName(e.target.value)} maxLength={40} placeholder="Team B" />
+          </label>
+
           <label className="location-field">
-            Turf field location
+            Turf / Location
             <span className="input-with-icon">
               <MapPin size={15} aria-hidden="true" />
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g. Bashundhara Turf, Dhaka"
-                maxLength={120}
-                autoComplete="street-address"
-              />
+              <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Bashundhara Turf, Dhaka" maxLength={120} autoComplete="street-address" />
             </span>
-            <small className="field-hint">Add the venue so everyone knows where to play.</small>
           </label>
-          <label>
-            Total match amount
-            <input
-              type="number"
-              min="0"
-              inputMode="decimal"
-              value={amount}
-              onFocus={() => { if (amount === "0") setAmount(""); }}
-              onChange={(e) => setAmount(normalizeNumericInput(e.target.value))}
-              placeholder="0"
-            />
-          </label>
-          <div className="selection-head">
-            <b>Select players</b>
-            <span>{selected.length} selected</span>
+
+          <div className="match-inline-fields match-money-fields">
+            <label>
+              Amount
+              <input
+                type="number"
+                min="0"
+                inputMode="decimal"
+                value={amount}
+                onFocus={() => { if (amount === "0") setAmount(""); }}
+                onChange={(e) => setAmount(normalizeNumericInput(e.target.value))}
+                placeholder="0"
+              />
+            </label>
+            <label>
+              Additional cost
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                inputMode="decimal"
+                value={additionalCost}
+                onFocus={() => { if (additionalCost === "0") setAdditionalCost(""); }}
+                onChange={(e) => setAdditionalCost(normalizeNumericInput(e.target.value))}
+                placeholder="0"
+              />
+            </label>
           </div>
-          <div className="select-list">
-            {sortPlayersByName(players.filter((p) => isPlayerActive(p) || selected.includes(p.id))).map((p) => (
-              <button
-                type="button"
-                className={`select-player ${selected.includes(p.id) ? "selected" : ""}`}
-                key={p.id}
-                onClick={() => toggle(p.id)}
-              >
-                <PlayerAvatar player={p} size="sm" />
-                <span>{p.name}</span>
-                {selected.includes(p.id) && <Check size={17} />}
-              </button>
-            ))}
-          </div>
-          {selected.length > 0 && Number(amount) > 0 && (
-            <div className="per-preview">
-              Average share <b>{money(Number(amount) / selected.length)}</b>
+
+          <button
+            type="button"
+            className={`match-player-launch ${selected.length ? "has-selection" : ""}`}
+            onClick={() => setPlayerSelectorOpen(true)}
+            aria-label="Select players"
+          >
+            <span className="match-player-launch-icon"><Users size={17} /></span>
+            <span className="match-player-launch-copy">
+              <b>Select players</b>
+              <small>{selected.length} {selected.length === 1 ? "player" : "players"} selected</small>
+            </span>
+            <ChevronRight size={18} className="match-player-launch-chevron" />
+          </button>
+
+          {selected.length > 0 && (
+            <div className="match-selection-summary">
+              <span>Selected players</span>
+              <b>{selected.length} {selected.length === 1 ? "player" : "players"} selected</b>
+              <small>
+                {selected
+                  .map((id) => players.find((p) => String(p?.id) === String(id))?.name)
+                  .filter(Boolean)
+                  .slice(0, 3)
+                  .join(", ")}
+                {selected.length > 3 ? ` + ${selected.length - 3} more` : ""}
+              </small>
             </div>
           )}
+
           {error && <div className="error">{error}</div>}
-          <button className="primary full" type="submit" disabled={busy}>
+          <button className="primary full match-submit-button" type="submit" disabled={busy}>
             {busy ? "Saving..." : editing ? "Save changes" : "Create match"}
           </button>
         </form>
       </div>
+
+      {playerSelectorOpen && (
+        <OverlayPortal>
+          <div className="player-selector-screen" role="dialog" aria-modal="true" aria-label="Select players">
+            <div className="player-selector-shell">
+              <header className="player-selector-header">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={closePlayerSelector}
+                  aria-label="Back to match form"
+                >
+                  <ChevronLeft />
+                </button>
+                <div>
+                  <span className="eyebrow">PLAYER SELECTION</span>
+                  <h2>Select players</h2>
+                </div>
+                <span className="player-selector-count">{selected.length}</span>
+              </header>
+
+              <div className="player-selector-content">
+                <div className="player-selector-summary">
+                  <b>{selected.length} {selected.length === 1 ? "player" : "players"} selected</b>
+                </div>
+
+                <label className="player-selector-search">
+                  <Search size={17} aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={playerSearch}
+                    onChange={(e) => setPlayerSearch(e.target.value)}
+                    placeholder="Search player..."
+                    aria-label="Search player"
+                    autoComplete="off"
+                    autoFocus
+                  />
+                  {playerSearch && (
+                    <button
+                      type="button"
+                      className="player-search-clear"
+                      onClick={() => setPlayerSearch("")}
+                      aria-label="Clear player search"
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                </label>
+
+                <div className="player-selector-list">
+                  {filteredPlayers.map((p) => {
+                    const isSelected = selected.includes(String(p.id));
+                    const isCustom = feeOverrides[p.id] !== undefined;
+                    return (
+                      <div className={`player-selector-row ${isSelected ? "selected" : ""}`} key={p.id}>
+                        <button
+                          type="button"
+                          className="player-selector-row-main"
+                          onClick={() => toggle(p.id)}
+                          aria-pressed={isSelected}
+                        >
+                          <span className={`player-selector-check ${isSelected ? "checked" : ""}`} aria-hidden="true">
+                            {isSelected && <Check size={13} strokeWidth={3} />}
+                          </span>
+                          <PlayerAvatar player={p} size="sm" />
+                          <span className="player-selector-name">{p.name}</span>
+                        </button>
+
+                        {isSelected && (
+                          <div className="match-player-fee-controls player-selector-fee-controls">
+                            <div className="fee-mode-switch" role="group" aria-label={`${p.name} fee mode`}>
+                              <button type="button" className={!isCustom ? "active" : ""} onClick={() => setAutomatic(p.id)}>Automatic</button>
+                              <button type="button" className={isCustom ? "active" : ""} onClick={() => setCustom(p.id)}>Custom</button>
+                            </div>
+                            {isCustom ? (
+                              <input
+                                type="number"
+                                min="0"
+                                max={numericTotalPreview > 0 ? numericTotalPreview : undefined}
+                                step="0.001"
+                                inputMode="decimal"
+                                value={feeOverrides[p.id]}
+                                onChange={(e) => updateCustomFee(p.id, e.target.value)}
+                                onFocus={(e) => { if (e.target.value === "0") updateCustomFee(p.id, ""); }}
+                                placeholder="Custom fee"
+                                aria-label={`Custom fee for ${p.name}`}
+                              />
+                            ) : (
+                              <span className="match-player-fee-preview">
+                                {money(calculatedFees.get(p.id) || 0)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {!filteredPlayers.length && (
+                    <div className="player-selector-empty">
+                      <Search size={18} />
+                      <b>No players found</b>
+                      <span>Try another player name.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="player-selector-footer">
+                <button type="button" className="primary full" onClick={closePlayerSelector}>
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>
+        </OverlayPortal>
+      )}
     </OverlayPortal>
   );
 }
-
 
 function resultCompletedMatches(matches, now = new Date()) {
   return getMatchOrder(matches)
@@ -4486,65 +5129,26 @@ function getCashOverviewData(matches, players) {
 
 
 function CashOverviewDuePlayers({ duePlayers = [], onOpen }) {
-  const totalDue = duePlayers.reduce((sum, item) => sum + item.due, 0);
+  const totalDue = duePlayers.reduce((sum, item) => sum + finiteTaka(item?.due), 0);
+  const countLabel = duePlayers.length === 1 ? "1 player" : `${duePlayers.length} players`;
 
   return (
-    <section className="due-players-card cash-overview-due" aria-labelledby="cash-due-players-title">
-      <div className="due-players-head">
-        <div>
-          <div className="eyebrow" id="cash-due-players-title">DUE PLAYERS</div>
-          <h3>Outstanding player balances</h3>
-          <p>{duePlayers.length ? `${duePlayers.length} ${duePlayers.length === 1 ? "player" : "players"}` : "Everyone is settled"}</p>
-        </div>
-        {duePlayers.length > 0 && onOpen ? (
-          <button type="button" className="cash-detail-link" onClick={onOpen}>View all <ChevronRight size={14} /></button>
-        ) : null}
-        <div className="due-players-total">
-          <span>TOTAL DUE</span>
-          <strong>{money(totalDue)}</strong>
-        </div>
+    <section className="cash-dashboard-summary-card cash-dashboard-due" aria-labelledby="cash-due-players-title">
+      <div className="cash-dashboard-summary-copy">
+        <div className="eyebrow" id="cash-due-players-title">DUE PLAYERS</div>
+        <p>Outstanding player balances</p>
+        <span className="cash-dashboard-summary-count">
+          {duePlayers.length ? countLabel : "No outstanding dues"}
+        </span>
       </div>
-
-      {duePlayers.length ? (
-        <div className="due-player-list">
-          {duePlayers.map(({ player, due, breakdown }) => (
-            <div className="due-player-row" key={player.id}>
-              <div className="due-player-main">
-                <div className="due-player-name">
-                  <b>{player.name}</b>
-                  <span>Outstanding balance</span>
-                </div>
-                <strong className="due-player-amount">{money(due)}</strong>
-              </div>
-              <div className="due-player-sources">
-                {breakdown.map((source) => (
-                  <div
-                    className="due-player-source"
-                    key={`${player.id}-${source.match?.id || source.matchNumber}`}
-                  >
-                    <span>
-                      Match {source.matchNumber} <i>•</i>{" "}
-                      {source.match?.date ? dateLabel(source.match.date) : "—"}
-                      {getMatchupLabel(source.match) ? (
-                        <small>{getMatchupLabel(source.match)}</small>
-                      ) : null}
-                    </span>
-                    <b>{money(source.amount)}</b>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-          {duePlayers.length > 3 && onOpen ? (
-            <div className="due-preview-more">+ {duePlayers.length - 3} more due players · <button type="button" onClick={onOpen}>View all <ChevronRight size={13} /></button></div>
-          ) : null}
-        </div>
-      ) : (
-        <div className="due-players-empty">
-          <Check size={17} aria-hidden="true" />
-          <span>Everyone is settled</span>
-        </div>
-      )}
+      <div className="cash-dashboard-summary-side">
+        <strong className="cash-dashboard-due-total">{money(totalDue)}</strong>
+        {onOpen && duePlayers.length ? (
+          <button type="button" className="cash-detail-link" onClick={onOpen}>
+            View all <ChevronRight size={14} />
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -4596,9 +5200,14 @@ function CashOverviewSummary({
           <small>Played matches only <span aria-hidden="true">›</span></small>
         </button>
         <div className={`account-cash-item account-cash-hand ${balanceState}`}>
-          <span className="account-cash-label">CASH IN HAND</span>
+          <span className="account-cash-hand-icon" aria-hidden="true">
+            <Wallet size={25} strokeWidth={2.1} />
+          </span>
+          <div className="account-cash-hand-copy">
+            <span className="account-cash-label">CASH IN HAND</span>
+            <small>Available after match costs</small>
+          </div>
           <strong>{money(data.cashInHand)}</strong>
-          <small>Available after match costs</small>
         </div>
       </div>
       <CashOverviewDuePlayers duePlayers={data.duePlayers} onOpen={onOpenDue} />
@@ -4728,6 +5337,49 @@ function getMatchAdvanceAmount(match) {
   return 0;
 }
 
+const shortTeamName = (name) => {
+  const value = String(name || "").trim();
+  if (!value) return "—";
+  const words = value.split(/\s+/).filter(Boolean);
+  if (value.length <= 4) return value.toUpperCase();
+  const latinWords = words.filter((word) => /[A-Za-z]/.test(word));
+  if (latinWords.length >= 2) {
+    return latinWords.slice(0, 3).map((word) => word.replace(/[^A-Za-z]/g, "").charAt(0)).join("").toUpperCase() || value.slice(0, 3).toUpperCase();
+  }
+  if (words.length >= 2) {
+    const initials = words.slice(0, 3).map((word) => Array.from(word)[0]).join("");
+    return initials.length ? initials.toUpperCase() : value.slice(0, 3).toUpperCase();
+  }
+  return Array.from(value.replace(/\s+/g, "")).slice(0, 3).join("").toUpperCase();
+};
+
+const compactMatchDate = (date) => {
+  const raw = String(date || "");
+  const [year, month, day] = raw.split("-");
+  if (!year || !month || !day) return "—";
+  return `${day}/${month}/${year.slice(-2)}`;
+};
+
+const getMatchAdvanceDisplay = (match, matchNumber) => ({
+  number: matchNumber,
+  date: compactMatchDate(match?.date),
+  dateSearch: String(match?.date || ""),
+  matchup: `${shortTeamName(match?.teamAName)} vs ${shortTeamName(match?.teamBName)}`,
+  originalMatchup: getMatchupLabel(match),
+  searchText: [
+    matchNumber,
+    `match ${matchNumber}`,
+    match?.date,
+    compactMatchDate(match?.date),
+    dateLabel(match?.date),
+    match?.teamAName,
+    match?.teamBName,
+    getMatchupLabel(match),
+    shortTeamName(match?.teamAName),
+    shortTeamName(match?.teamBName),
+  ].filter(Boolean).join(" "),
+});
+
 function getMatchAdvanceNote(match) {
   return String(match?.advanceNote ?? match?.prebookNote ?? match?.advanceSource ?? "").trim();
 }
@@ -4748,60 +5400,100 @@ function getMatchAdvanceRecords(matches) {
 }
 
 function MatchAdvancePreview({ records = [], onOpen }) {
-  const upcoming = records
-    .filter((row) => !row.completed)
-    .sort((a, b) => getMatchSortKey(a.match).localeCompare(getMatchSortKey(b.match)));
-  const completed = records
-    .filter((row) => row.completed)
-    .sort((a, b) => getMatchSortKey(b.match).localeCompare(getMatchSortKey(a.match)));
-  const visible = [...upcoming.slice(0, 1), ...completed.slice(0, 1)];
-  const total = records.reduce((sum, row) => sum + row.amount, 0);
+  const total = records.reduce((sum, row) => sum + finiteTaka(row?.amount), 0);
+  const countLabel = records.length === 1 ? "1 advance record" : `${records.length} advance records`;
 
   return (
-    <section className="cash-advance-preview" aria-labelledby="cash-advance-preview-title">
-      <div className="cash-advance-preview-head">
-        <div>
-          <div className="eyebrow" id="cash-advance-preview-title">MATCH ADVANCE</div>
-          <p>{records.length ? `${records.length} booking ${records.length === 1 ? "record" : "records"}` : "Pre-booking records"}</p>
-        </div>
-        {onOpen ? <button type="button" className="cash-detail-link" onClick={() => onOpen("all")}>View all <ChevronRight size={14} /></button> : null}
+    <section className="cash-dashboard-summary-card cash-dashboard-advance" aria-labelledby="cash-advance-preview-title">
+      <div className="cash-dashboard-summary-copy">
+        <div className="eyebrow" id="cash-advance-preview-title">MATCH ADVANCE</div>
+        <p>Pre-booking advances</p>
+        <span className="cash-dashboard-summary-count">
+          {records.length ? countLabel : "No advance recorded"}
+        </span>
       </div>
-      {visible.length ? (
-        <div className="cash-advance-preview-list">
-          {visible.map((row) => (
-            <div className="cash-advance-preview-row" key={row.id}>
-              <div>
-                <b>Match {row.matchNumber} · {row.match?.date ? dateLabel(row.match.date) : "—"}</b>
-                <span>{getMatchupLabel(row.match)}</span>
-                {row.note ? <small>📝 {row.note}</small> : null}
-              </div>
-              <strong>{money(row.amount)}</strong>
-            </div>
-          ))}
-          {(upcoming.length > 0 || completed.length > 0) && onOpen ? (
-            <div className="cash-advance-preview-more">
-              {upcoming.length > 0 ? <button type="button" onClick={() => onOpen("upcoming")}>View upcoming ({upcoming.length}) <ChevronRight size={13} /></button> : null}
-              {completed.length > 0 ? <button type="button" onClick={() => onOpen("completed")}>View history ({completed.length}) <ChevronRight size={13} /></button> : null}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <div className="cash-advance-preview-empty">No match advance records yet.</div>
-      )}
-      {records.length ? <div className="cash-advance-preview-total"><span>TOTAL ADVANCE</span><strong>{money(total)}</strong></div> : null}
+      <div className="cash-dashboard-summary-side">
+        <strong className="cash-dashboard-advance-total">{money(total)}</strong>
+        {onOpen ? (
+          <button type="button" className="cash-detail-link" onClick={() => onOpen("all")}>
+            View all <ChevronRight size={14} />
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }
 
 function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
   useBodyScrollLock(true);
-  useEscapeHandler(true, onClose);
-  const [matchId, setMatchId] = useState(initialMatch?.id || matches[0]?.id || "");
-  const selectedMatch = matches.find((m) => String(m.id) === String(matchId)) || initialMatch || null;
+  const isEditingAdvance = Boolean(initialMatch?.id);
+  const orderedMatches = useMemo(() => getMatchOrder(Array.isArray(matches) ? matches : []), [matches]);
+  const permanentNumbers = useMemo(
+    () => new Map(orderedMatches.map((m, i) => [String(m?.id || ""), i + 1])),
+    [orderedMatches]
+  );
+  const [matchId, setMatchId] = useState(initialMatch?.id || "");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerFilter, setPickerFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const selectedMatch = orderedMatches.find((m) => String(m.id) === String(matchId)) || initialMatch || null;
   const [amount, setAmount] = useState(selectedMatch ? String(getMatchAdvanceAmount(selectedMatch) || "") : "");
   const [note, setNote] = useState(selectedMatch ? getMatchAdvanceNote(selectedMatch) : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const closePicker = () => {
+    setPickerOpen(false);
+    setQuery("");
+    setPickerFilter("all");
+  };
+
+  useEscapeHandler(true, pickerOpen ? closePicker : onClose);
+
+  const pickerRows = useMemo(() => {
+    const now = new Date();
+    const rows = orderedMatches.map((match) => {
+      const matchNumber = permanentNumbers.get(String(match?.id || "")) || 0;
+      const dateTime = getMatchDateTime(match);
+      const upcoming = Boolean(dateTime && dateTime.getTime() > now.getTime() && !isMatchCompleted(match));
+      const display = getMatchAdvanceDisplay(match, matchNumber);
+      return { match, matchNumber, display, upcoming, completed: isMatchCompleted(match) };
+    });
+
+    const term = normalizeMatchSearchText(query);
+
+    return rows
+      .filter((row) => {
+        if (pickerFilter === "upcoming" && !row.upcoming) return false;
+        if (pickerFilter === "completed" && row.upcoming) return false;
+        if (!term) return true;
+        return normalizeMatchSearchText(row.display.searchText).includes(term);
+      })
+      .sort((a, b) => {
+        if (a.upcoming !== b.upcoming) return a.upcoming ? -1 : 1;
+        return a.upcoming
+          ? getMatchSortKey(a.match).localeCompare(getMatchSortKey(b.match))
+          : getMatchSortKey(b.match).localeCompare(getMatchSortKey(a.match));
+      });
+  }, [orderedMatches, permanentNumbers, pickerFilter, query]);
+
+  const firstUpcomingId = useMemo(
+    () => pickerRows.find((row) => row.upcoming)?.match?.id || null,
+    [pickerRows]
+  );
+
+  const chooseMatch = (nextId) => {
+    setMatchId(nextId);
+    const next = orderedMatches.find((m) => String(m.id) === String(nextId));
+    setAmount(next ? String(getMatchAdvanceAmount(next) || "") : "");
+    setNote(next ? getMatchAdvanceNote(next) : "");
+    closePicker();
+  };
+
+  const selectedDisplay = selectedMatch
+    ? getMatchAdvanceDisplay(selectedMatch, permanentNumbers.get(String(selectedMatch.id)) || 0)
+    : null;
+
   const save = async (e) => {
     e.preventDefault();
     if (busy || !selectedMatch) return;
@@ -4821,6 +5513,30 @@ function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
       setError(message); setAppError?.(message);
     } finally { setBusy(false); }
   };
+
+  const renderPickerRow = (row) => (
+    <button
+      key={row.match.id}
+      type="button"
+      className={`cash-advance-fullscreen-match-row${String(row.match.id) === String(matchId) ? " selected" : ""}`}
+      onClick={() => chooseMatch(row.match.id)}
+      role="option"
+      aria-selected={String(row.match.id) === String(matchId)}
+    >
+      <span className="cash-advance-fullscreen-match-main">
+        <b>#{row.matchNumber} · {row.display.date} · {row.display.matchup}</b>
+        <small>
+          {(row.match?.startTime || row.match?.time || "—")}
+          {row.match?.endTime ? ` — ${row.match.endTime}` : ""}
+          {row.match?.location ? ` · ${row.match.location}` : ""}
+        </small>
+      </span>
+      <span className={`cash-advance-fullscreen-status${row.match.id === firstUpcomingId ? " next" : ""}`}>
+        {row.match.id === firstUpcomingId ? "NEXT" : row.upcoming ? "UPCOMING" : "COMPLETED"}
+      </span>
+    </button>
+  );
+
   return (
     <OverlayPortal>
       <div className="modal-backdrop">
@@ -4829,16 +5545,37 @@ function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
             <div><span className="eyebrow">MATCH ADVANCE</span><h2>{initialMatch ? "Edit advance" : "Add advance"}</h2></div>
             <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><X /></button>
           </div>
-          <label>Match
-            <select value={matchId} onChange={(e) => {
-              setMatchId(e.target.value);
-              const next = matches.find((m) => String(m.id) === e.target.value);
-              setAmount(next ? String(getMatchAdvanceAmount(next) || "") : "");
-              setNote(next ? getMatchAdvanceNote(next) : "");
-            }}>
-              {matches.map((m, i) => <option key={m.id} value={m.id}>Match {i + 1} · {m.date ? dateLabel(m.date) : "—"} · {getMatchupLabel(m)}</option>)}
-            </select>
+
+          <label className="cash-advance-match-field">Match
+            {isEditingAdvance ? (
+              <div
+                className={`cash-advance-match-select cash-advance-match-select-locked${selectedDisplay ? " has-selection" : ""}`}
+                role="textbox"
+                aria-readonly="true"
+                aria-label="Match is locked while editing"
+                title="This match is fixed while editing"
+              >
+                <span className="cash-advance-match-value">
+                  {selectedDisplay ? `#${selectedDisplay.number} · ${selectedDisplay.date} · ${selectedDisplay.matchup}` : "Selected match"}
+                </span>
+                <LockKeyhole size={15} aria-hidden="true" />
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={`cash-advance-match-select${selectedDisplay ? " has-selection" : ""}`}
+                onClick={() => setPickerOpen(true)}
+                aria-haspopup="dialog"
+                aria-expanded={pickerOpen}
+              >
+                <span className="cash-advance-match-value">
+                  {selectedDisplay ? `#${selectedDisplay.number} · ${selectedDisplay.date} · ${selectedDisplay.matchup}` : "Select match"}
+                </span>
+                {selectedDisplay ? <span className="cash-advance-match-check" aria-hidden="true">✓</span> : <ChevronDown size={16} aria-hidden="true" />}
+              </button>
+            )}
           </label>
+
           <label>Advance amount
             <input type="number" min="0" step="0.001" inputMode="decimal" value={amount} onChange={(e) => setAmount(normalizeNumericInput(e.target.value))} placeholder="৳0" />
           </label>
@@ -4850,6 +5587,81 @@ function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
           <button className="primary full" type="submit" disabled={busy}>{busy ? "Saving..." : "Save advance"}</button>
         </form>
       </div>
+
+      {pickerOpen && !isEditingAdvance ? (
+        <OverlayPortal>
+          <section className="cash-advance-match-selector" role="dialog" aria-modal="true" aria-label="Select match">
+          <header className="cash-advance-match-selector-head">
+            <button type="button" className="cash-advance-match-selector-back" onClick={closePicker} aria-label="Back to Add Advance" title="Back">
+              <ChevronLeft size={20} />
+            </button>
+            <div>
+              <span className="eyebrow">SELECT MATCH</span>
+              <strong>Choose a match for this advance</strong>
+            </div>
+          </header>
+
+          <main className="cash-advance-match-selector-content">
+            <div className="cash-advance-fullscreen-search">
+              <Search size={16} aria-hidden="true" />
+              <input
+                autoFocus
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search match number or date..."
+                aria-label="Search match number, date, or team"
+              />
+              {query ? (
+                <button type="button" onClick={() => setQuery("")} aria-label="Clear match search" title="Clear search">
+                  <X size={14} />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="cash-advance-fullscreen-filters" role="tablist" aria-label="Match filters">
+              {[["all", "ALL"], ["upcoming", "UPCOMING"], ["completed", "COMPLETED"]].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={pickerFilter === value}
+                  className={pickerFilter === value ? "active" : ""}
+                  onClick={() => setPickerFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="cash-advance-fullscreen-results" role="listbox" aria-label="Available matches">
+              {pickerRows.length ? (
+                pickerFilter === "all" ? (
+                  <>
+                    {pickerRows.some((row) => row.upcoming) ? <div className="cash-advance-group-label">UPCOMING</div> : null}
+                    {pickerRows.filter((row) => row.upcoming).map(renderPickerRow)}
+                    {pickerRows.some((row) => !row.upcoming) ? <div className="cash-advance-group-label">COMPLETED</div> : null}
+                    {pickerRows.filter((row) => !row.upcoming).map(renderPickerRow)}
+                  </>
+                ) : (
+                  <>
+                    <div className="cash-advance-group-label">
+                      {pickerFilter === "upcoming" ? "UPCOMING" : "COMPLETED"}
+                    </div>
+                    {pickerRows.map(renderPickerRow)}
+                  </>
+                )
+              ) : (
+                <div className="cash-advance-match-empty-full">
+                  <strong>NO MATCH FOUND</strong>
+                  <p>{query ? <>Search: <b>{query}</b><br />No matching match was found.</> : "No matches are available for this filter."}</p>
+                </div>
+              )}
+            </div>
+          </main>
+          </section>
+        </OverlayPortal>
+      ) : null}
     </OverlayPortal>
   );
 }
@@ -4860,85 +5672,394 @@ function MatchAdvanceScreen({ matches, onBack, setAppError, initialFilter = "all
   const [editing, setEditing] = useState(null);
   useBodyScrollLock(true);
   useEscapeHandler(true, onBack);
-  const records = useMemo(() => getMatchAdvanceRecords(matches), [matches]);
-  const orderedMatches = useMemo(() => getMatchOrder(matches), [matches]);
-  const matchNumbers = useMemo(() => new Map(orderedMatches.map((m, i) => [String(m.id), i + 1])), [orderedMatches]);
+
+  const orderedMatches = useMemo(
+    () => getMatchOrder(Array.isArray(matches) ? matches : []),
+    [matches],
+  );
+
+  // Match numbers are the existing chronological sequence used by TurfClub.
+  // Keep that sequence stable, but display the ledger in descending match-number order.
+  const rows = useMemo(
+    () =>
+      orderedMatches.map((match, index) => ({
+        id: String(match?.id || `match-${index}`),
+        match,
+        matchNumber: index + 1,
+        amount: getMatchAdvanceAmount(match),
+        note: getMatchAdvanceNote(match),
+        completed: isMatchCompleted(match),
+      })),
+    [orderedMatches],
+  );
+
+  const nextUpcomingId = useMemo(() => {
+    const existingNext = getNextMatch(orderedMatches);
+    if (existingNext?.id) return String(existingNext.id);
+    return (
+      orderedMatches.find((match) => !isMatchCompleted(match))?.id ||
+      null
+    );
+  }, [orderedMatches]);
+
   const filtered = useMemo(() => {
     const term = normalizeMatchSearchText(query);
-    return records.filter((row) => {
-      if (filter === "upcoming" && row.completed) return false;
-      if (filter === "completed" && !row.completed) return false;
-      if (!term) return true;
-      if (/^\d+$/.test(query.trim())) return String(row.matchNumber) === query.trim();
-      const raw = String(row.match?.date || "");
-      const [year = "", month = "", day = ""] = raw.split("-");
-      const aliases = [
-        String(row.matchNumber), `match ${row.matchNumber}`, raw,
-        row.match?.date ? dateLabel(row.match.date) : "",
-        `${day} ${month} ${year}`, `${day}/${month}/${year}`, `${year}-${month}-${day}`,
-      ].map(normalizeMatchSearchText);
-      return aliases.some((value) => value.includes(term));
-    }).sort((a, b) => {
-      const byStatus = Number(a.completed) - Number(b.completed);
-      if (filter === "all" && byStatus !== 0) return byStatus;
-      return filter === "completed"
-        ? getMatchSortKey(b.match).localeCompare(getMatchSortKey(a.match))
-        : getMatchSortKey(a.match).localeCompare(getMatchSortKey(b.match));
-    });
-  }, [records, query, filter]);
-  const total = filtered.reduce((sum, row) => sum + row.amount, 0);
+
+    return rows
+      .filter((row) => {
+        const upcoming = !row.completed;
+        if (filter === "upcoming" && !upcoming) return false;
+        if (filter === "completed" && upcoming) return false;
+
+        if (!term) return true;
+
+        // Search the complete match ledger: number, date, and team names.
+        return normalizeMatchSearchText(rowSearchText(row)).includes(term);
+      })
+      .sort((a, b) => b.matchNumber - a.matchNumber);
+  }, [rows, query, filter]);
+
+  const totalAdvance = useMemo(
+    () => rows.reduce((sum, row) => sum + row.amount, 0),
+    [rows],
+  );
+
+  const countLabel = query.trim()
+    ? `${filtered.length} ${filtered.length === 1 ? "match" : "matches"} found`
+    : `${rows.length} ${rows.length === 1 ? "match" : "matches"}`;
+
   return (
     <OverlayPortal>
       <div className="account-cash-audit-screen detail-page cash-advance-screen">
         <header className="account-cash-audit-screen-head">
-          <button type="button" className="account-cash-audit-back" onClick={onBack} aria-label="Back to cash overview"><ChevronLeft size={20} /></button>
-          <div className="account-cash-audit-screen-title"><span className="eyebrow">MATCH ADVANCE</span><strong>Pre-booking records</strong><p>{records.length} records · searchable by match number or date</p></div>
+          <button
+            type="button"
+            className="account-cash-audit-back"
+            onClick={onBack}
+            aria-label="Back to cash overview"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div className="account-cash-audit-screen-title">
+            <span className="eyebrow">MATCH ADVANCE</span>
+            <strong>Pre-booking records</strong>
+            <p>{countLabel}</p>
+          </div>
         </header>
+
         <main className="account-cash-audit-screen-content">
           <div className="cash-detail-toolbar">
-            <div className="cash-detail-search"><Search size={15} /><input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search match number or date..." aria-label="Search match number or date" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={14} /></button> : null}</div>
-            <div className="cash-filter-row">{[["all","All"],["upcoming","Upcoming"],["completed","Completed"]].map(([value,label]) => <button key={value} type="button" className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>
-            <button type="button" className="primary compact cash-add-advance" onClick={() => setEditing({})}><Plus size={15} /> Add advance</button>
+            <div className="cash-detail-search">
+              <Search size={15} aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search match number or date..."
+                aria-label="Search match number, date, or team"
+              />
+              {query ? (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  title="Clear search"
+                >
+                  <X size={14} />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="cash-filter-row" role="tablist" aria-label="Match filters">
+              {[
+                ["all", "ALL"],
+                ["upcoming", "UPCOMING"],
+                ["completed", "COMPLETED"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === value}
+                  className={filter === value ? "active" : ""}
+                  onClick={() => setFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-          {filtered.length ? <div className="cash-advance-list">{filtered.map((row) => <article className="cash-advance-card" key={row.id}>
-            <div className="cash-advance-card-head"><div><span>MATCH {row.matchNumber}</span><strong>{row.match?.date ? dateLabel(row.match.date) : "DATE UNAVAILABLE"}</strong></div><b>{money(row.amount)}</b></div>
-            <p className="cash-advance-matchup">{getMatchupLabel(row.match)}</p>
-            <p className="cash-advance-meta">{row.match?.startTime || row.match?.time || "—"}{row.match?.endTime ? ` — ${row.match.endTime}` : ""} · {row.match?.location || "Location unavailable"}</p>
-            {row.note ? <p className="cash-advance-note">📝 {row.note}</p> : null}
-            <div className="cash-advance-card-actions"><span>{row.completed ? "COMPLETED" : "NEXT UPCOMING"}</span><button type="button" onClick={() => setEditing(row.match)}>Edit</button></div>
-          </article>)}</div> : <div className="account-cash-audit-empty"><strong>NO MATCH ADVANCE FOUND</strong><p>{query ? <>Search: <b>{query}</b><br />No matching match number or date was found.</> : "No pre-booking records match this filter."}</p></div>}
+
+          {filtered.length ? (
+            <div className="cash-advance-list" aria-label="Match advance ledger">
+              {filtered.map((row) => {
+                const isNext = String(row.id) === String(nextUpcomingId);
+                return (
+                  <article className="cash-advance-card" key={row.id}>
+                    <div className="cash-advance-card-head">
+                      <div>
+                        <span>MATCH {row.matchNumber}</span>
+                        <strong>
+                          {row.match?.date
+                            ? dateLabel(row.match.date)
+                            : "DATE UNAVAILABLE"}
+                        </strong>
+                      </div>
+                      <b className={row.amount > 0 ? "advance-has-value" : "advance-zero"}>
+                        {money(row.amount)}
+                      </b>
+                    </div>
+
+                    <p className="cash-advance-matchup">
+                      {getMatchupLabel(row.match)}
+                    </p>
+
+                    <p className="cash-advance-meta">
+                      {row.match?.startTime || row.match?.time || "—"}
+                      {row.match?.endTime ? ` — ${row.match.endTime}` : ""}
+                      {" · "}
+                      {row.match?.location || "Location unavailable"}
+                    </p>
+
+                    {row.note ? (
+                      <p className="cash-advance-note">📝 {row.note}</p>
+                    ) : (
+                      <p className="cash-advance-note muted">No advance recorded</p>
+                    )}
+
+                    <div className="cash-advance-card-actions">
+                      <span>
+                        {isNext
+                          ? "NEXT UPCOMING"
+                          : row.completed
+                            ? "COMPLETED"
+                            : "UPCOMING"}
+                      </span>
+                      <button
+                        type="button"
+                        className="cash-advance-edit-btn"
+                        onClick={() => setEditing(row.match)}
+                        aria-label={`Edit match ${row.matchNumber} advance`}
+                        title="Edit advance"
+                      >
+                        <Pencil size={15} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="account-cash-audit-empty">
+              <strong>NO MATCH FOUND</strong>
+              <p>
+                {query ? (
+                  <>
+                    Search: <b>{query}</b>
+                    <br />
+                    No matching match was found.
+                  </>
+                ) : (
+                  `No matches are available for ${filter} view.`
+                )}
+              </p>
+            </div>
+          )}
         </main>
-        <footer className="account-cash-audit-screen-total"><span>TOTAL ADVANCE</span><strong>{money(total)}</strong></footer>
-        {editing ? <MatchAdvanceForm matches={matches} initialMatch={editing.id ? editing : null} onClose={() => setEditing(null)} setAppError={setAppError} /> : null}
+
+        <footer className="account-cash-audit-screen-total">
+          <span>TOTAL ADVANCE</span>
+          <strong>{money(totalAdvance)}</strong>
+        </footer>
+
+        {editing ? (
+          <MatchAdvanceForm
+            matches={matches}
+            initialMatch={editing}
+            onClose={() => setEditing(null)}
+            setAppError={setAppError}
+          />
+        ) : null}
       </div>
     </OverlayPortal>
   );
+}
+
+function rowSearchText(row) {
+  const match = row?.match || {};
+  return [
+    row?.matchNumber,
+    `match ${row?.matchNumber}`,
+    match?.date,
+    match?.date ? compactMatchDate(match.date) : "",
+    match?.date ? dateLabel(match.date) : "",
+    match?.teamAName,
+    match?.teamBName,
+    getMatchupLabel(match),
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function DuePlayersScreen({ duePlayers, onBack }) {
   const [query, setQuery] = useState("");
   useBodyScrollLock(true);
   useEscapeHandler(true, onBack);
+
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return duePlayers.filter((item) => !term || String(item.player?.name || "").toLowerCase().includes(term));
+    return duePlayers.filter(
+      (item) =>
+        !term ||
+        String(item.player?.name || "")
+          .trim()
+          .toLowerCase()
+          .includes(term),
+    );
   }, [duePlayers, query]);
-  const total = filtered.reduce((sum, item) => sum + item.due, 0);
+
+  const totalDue = duePlayers.reduce((sum, item) => sum + finiteTaka(item?.due), 0);
+
   return (
     <OverlayPortal>
-      <div className="account-cash-audit-screen detail-page due-full-screen">
-        <header className="account-cash-audit-screen-head">
-          <button type="button" className="account-cash-audit-back" onClick={onBack} aria-label="Back to cash overview"><ChevronLeft size={20} /></button>
-          <div className="account-cash-audit-screen-title"><span className="eyebrow">DUE PLAYERS</span><strong>Outstanding player balances</strong><p>{duePlayers.length} due {duePlayers.length === 1 ? "player" : "players"}</p></div>
+      <div className="account-cash-audit-screen detail-page due-full-screen due-players-modern">
+        <header className="due-players-screen-head">
+          <button
+            type="button"
+            className="account-cash-audit-back"
+            onClick={onBack}
+            aria-label="Back to cash overview"
+            title="Back to cash overview"
+          >
+            <ChevronLeft size={20} />
+          </button>
+
+          <div className="due-players-screen-title">
+            <span className="eyebrow">DUE PLAYERS</span>
+            <strong>Outstanding player balances</strong>
+            <p>
+              {duePlayers.length}{" "}
+              {duePlayers.length === 1 ? "player" : "players"}
+            </p>
+          </div>
         </header>
-        <main className="account-cash-audit-screen-content">
-          <div className="cash-detail-search"><Search size={15} /><input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search player name..." aria-label="Search player name" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={14} /></button> : null}</div>
-          {filtered.length ? <div className="due-full-list">{filtered.map(({ player, due, breakdown }) => <article className="due-full-card" key={player.id}>
-            <div className="due-full-head"><div><strong>{player.name}</strong><span>Outstanding balance</span></div><b>{money(due)}</b></div>
-            <div>{breakdown.map((source) => <div className="due-full-source" key={`${player.id}-${source.match?.id || source.matchNumber}`}><div><b>Match {source.matchNumber} · {source.match?.date ? dateLabel(source.match.date) : "—"}</b><span>{getMatchupLabel(source.match)}</span></div><strong>{money(source.amount)}</strong></div>)}</div>
-          </article>)}</div> : <div className="account-cash-audit-empty"><strong>NO DUE PLAYER FOUND</strong><p>{query ? <>Search: <b>{query}</b><br />No player with an outstanding balance matches this search.</> : "Everyone is settled."}</p></div>}
+
+        <main className="account-cash-audit-screen-content due-players-screen-content">
+          <div className="cash-detail-search due-players-search">
+            <Search size={16} aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search player name..."
+              aria-label="Search player name"
+            />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear player search"
+                title="Clear search"
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+
+          {filtered.length ? (
+            <div className="due-players-modern-list">
+              {filtered.map(({ player, due, breakdown }) => {
+                const playerDue = Math.max(0, finiteTaka(due));
+
+                return (
+                  <article className="due-player-premium-card" key={player.id}>
+                    <div className="due-player-premium-head">
+                      <PlayerAvatar
+                        player={player}
+                        size="md"
+                        className="due-player-premium-avatar"
+                      />
+
+                      <div className="due-player-premium-identity">
+                        <strong>{player.name}</strong>
+                        <span>Outstanding balance</span>
+                      </div>
+
+                      <strong className="due-player-premium-amount">
+                        {money(playerDue)}
+                      </strong>
+                    </div>
+
+                    <div className="due-player-premium-divider" />
+
+                    <div className="due-player-premium-sources">
+                      {breakdown.map((source) => (
+                        <div
+                          className="due-player-premium-source"
+                          key={`${player.id}-${source.match?.id || source.matchNumber}`}
+                        >
+                          <CalendarDays
+                            size={17}
+                            className="due-player-premium-source-icon"
+                            aria-hidden="true"
+                          />
+
+                          <div className="due-player-premium-source-main">
+                            <div className="due-player-premium-source-row">
+                              <b>
+                                MATCH {source.matchNumber} ·{" "}
+                                {source.match?.date
+                                  ? dateLabel(source.match.date)
+                                  : "—"}
+                              </b>
+                              <strong>{money(finiteTaka(source.amount))}</strong>
+                            </div>
+
+                            {getMatchupLabel(source.match) ? (
+                              <span>{getMatchupLabel(source.match)}</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="due-players-modern-empty account-cash-audit-empty">
+              <div className="due-players-empty-icon" aria-hidden="true">
+                <Check size={19} />
+              </div>
+              <strong>
+                {query ? "NO DUE PLAYER FOUND" : "Everyone is settled"}
+              </strong>
+              <p>
+                {query
+                  ? `No player with an outstanding balance matches “${query.trim()}”.`
+                  : "All current player balances are settled."}
+              </p>
+            </div>
+          )}
         </main>
-        <footer className="account-cash-audit-screen-total"><span>TOTAL DUE</span><strong>{money(total)}</strong></footer>
+
+        {duePlayers.length ? (
+          <footer className="due-players-modern-total">
+            <div className="due-players-modern-total-icon" aria-hidden="true">
+              <Wallet size={18} />
+            </div>
+            <div className="due-players-modern-total-copy">
+              <strong>TOTAL DUE</strong>
+              <span>
+                {duePlayers.length}{" "}
+                {duePlayers.length === 1 ? "player" : "players"}
+              </span>
+            </div>
+            <strong className="due-players-modern-total-amount">
+              {money(totalDue)}
+            </strong>
+          </footer>
+        ) : null}
       </div>
     </OverlayPortal>
   );
