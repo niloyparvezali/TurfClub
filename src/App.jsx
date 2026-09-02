@@ -253,21 +253,6 @@ const buildUpcomingScheduleImage = (matches, now = new Date()) => {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
 
-  // Keep right-aligned financial values inside a deliberate safe area.
-  const fitScheduleText = (text, maxWidth, weight, baseSize, minSize = 20) => {
-    const value = String(text || "");
-    let size = baseSize;
-    while (size > minSize) {
-      ctx.font = `${weight} ${size}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
-      if (ctx.measureText(value).width <= maxWidth) {
-        return { value, size, font: ctx.font };
-      }
-      size -= 1;
-    }
-    ctx.font = `${weight} ${minSize}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
-    return { value, size: minSize, font: ctx.font };
-  };
-
   ctx.fillStyle = "#06100b";
   ctx.fillRect(0, 0, width, height);
   const glow = ctx.createRadialGradient(width / 2, 0, 20, width / 2, 0, 620);
@@ -316,23 +301,17 @@ const buildUpcomingScheduleImage = (matches, now = new Date()) => {
     ctx.font = '600 24px Inter, system-ui, sans-serif';
     ctx.fillText(`📍  ${location}`, padding + 28, y + 137);
 
-    // Both label and amount share the same inset right edge. The amount is
-    // fitted before drawing so long decimal values never touch the card border.
-    const cardRight = width - padding;
-    const amountRight = cardRight - 28;
-    const amountLeft = padding + 28;
-    const amountSafeWidth = Math.max(80, amountRight - amountLeft);
-
     ctx.textAlign = "right";
     ctx.fillStyle = "#91a397";
     ctx.font = '700 18px Inter, system-ui, sans-serif';
-    ctx.fillText("PER PERSON", amountRight, y + 48);
-
-    const amountText = perPerson == null ? "N/A" : money(perPerson);
-    const fittedAmount = fitScheduleText(amountText, amountSafeWidth, 900, 32, 22);
+    ctx.fillText("PER PERSON", width - padding - 28, y + 48);
     ctx.fillStyle = "#b7ff4a";
-    ctx.font = fittedAmount.font;
-    ctx.fillText(fittedAmount.value, amountRight, y + 91);
+    ctx.font = '900 32px Inter, system-ui, sans-serif';
+    ctx.fillText(
+      perPerson == null ? "N/A" : money(perPerson),
+      width - padding - 28,
+      y + 91,
+    );
     ctx.textAlign = "left";
   });
 
@@ -358,19 +337,16 @@ const buildReminderImage = (match, now = new Date()) => {
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
 
-  const fitText = (text, maxWidth, weight, baseSize, minSize = 26, family = 'Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif') => {
+  const clampText = (text, maxWidth, font, maxChars = 120) => {
     const value = String(text || "");
-    let size = baseSize;
-    while (size > minSize) {
-      ctx.font = `${weight} ${size}px ${family}`;
-      if (ctx.measureText(value).width <= maxWidth) return { value, size, font: ctx.font };
-      size -= 1;
+    ctx.font = font;
+    if (ctx.measureText(value).width <= maxWidth || value.length <= 1) return value;
+    let clipped = value.slice(0, maxChars);
+    while (clipped.length > 1 && ctx.measureText(`${clipped}…`).width > maxWidth) {
+      clipped = clipped.slice(0, -1);
     }
-    ctx.font = `${weight} ${minSize}px ${family}`;
-    return { value, size: minSize, font: ctx.font };
+    return `${clipped}…`;
   };
-
-  const cleanNote = (value) => String(value || "").trim().replace(/\s*,\s*/g, ", ");
 
   // Red + black match-night visual system. Layout and information hierarchy remain unchanged.
   ctx.fillStyle = "#050505";
@@ -463,7 +439,6 @@ const buildReminderImage = (match, now = new Date()) => {
   const endTime = match.endTime ? timeLabel(match.endTime) : "";
   const timeText = endTime ? `${startTime} — ${endTime}` : startTime;
   const location = String(match.location || "Turf field").trim() || "Turf field";
-  const note = cleanNote(String(match.note || "").slice(0, 20));
   const perPerson = match.participants?.length
     ? Number(match.totalAmount || 0) / match.participants.length
     : null;
@@ -472,11 +447,11 @@ const buildReminderImage = (match, now = new Date()) => {
 
   // Brand + visual cue.
   ctx.fillStyle = "#ffffff";
-  ctx.font = '900 44px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '950 28px Inter, system-ui, sans-serif';
   ctx.fillText("TURFCLUB", padding, 92);
 
   ctx.fillStyle = "#ff3344";
-  ctx.font = '800 19px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '800 17px Inter, system-ui, sans-serif';
   ctx.fillText("MATCH NIGHT", padding, 126);
 
   // Single-match hero frame: same size/placement, red-black visual treatment only.
@@ -510,33 +485,26 @@ const buildReminderImage = (match, now = new Date()) => {
   ctx.fillRect(heroX + heroW - 7, heroY + 42, 7, heroH - 84);
 
   ctx.fillStyle = "#ff3c4e";
-  ctx.font = '800 21px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '800 18px Inter, system-ui, sans-serif';
   ctx.fillText("MATCH REMINDER", heroX + 42, heroY + 64);
 
-  // Matchup stays in the same hero position, but scales responsively and
-  // keeps Bengali-capable fallbacks so long team names never clip.
-  const matchupMaxWidth = heroW - 84;
-  const matchupParts = matchup.split(/(\s+vs\s+)/i);
-  let matchupSize = 72;
-  if (matchupParts.length >= 3) {
-    for (; matchupSize >= 38; matchupSize -= 1) {
-      ctx.font = `950 ${matchupSize}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
-      const totalWidth = matchupParts.reduce((sum, part) => sum + ctx.measureText(part).width, 0);
-      if (totalWidth <= matchupMaxWidth) break;
-    }
+  // Matchup is still the dominant element, with a red VS treatment.
+  const matchupFont = '950 53px Inter, system-ui, sans-serif';
+  const matchupText = clampText(matchup, heroW - 84, matchupFont);
+  const parts = matchupText.split(/( vs )/i);
+  if (parts.length >= 3) {
     let cursorX = heroX + 42;
-    matchupParts.forEach((part) => {
+    parts.forEach((part) => {
       const isVs = /^\s*vs\s*$/i.test(part);
-      ctx.font = `950 ${matchupSize}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
+      ctx.font = matchupFont;
       ctx.fillStyle = isVs ? "#ff3344" : "#ffffff";
       ctx.fillText(part, cursorX, heroY + 150);
       cursorX += ctx.measureText(part).width;
     });
   } else {
-    const fitted = fitText(matchup, matchupMaxWidth, 950, 72, 38);
-    ctx.font = fitted.font;
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(fitted.value, heroX + 42, heroY + 150);
+    ctx.font = matchupFont;
+    ctx.fillText(matchupText, heroX + 42, heroY + 150);
   }
 
   // Subtle aggressive divider accent beneath matchup.
@@ -559,22 +527,21 @@ const buildReminderImage = (match, now = new Date()) => {
   ctx.fillStyle = "#ffffff";
   ctx.shadowColor = "rgba(255,52,68,0.22)";
   ctx.shadowBlur = 10;
-  const fittedTime = fitText(timeText, heroW - 84, 900, 52, 34);
-  ctx.font = fittedTime.font;
-  ctx.fillText(fittedTime.value, heroX + 42, heroY + 322);
+  ctx.font = '950 54px Inter, system-ui, sans-serif';
+  ctx.fillText(
+    clampText(timeText, heroW - 84, '950 54px Inter, system-ui, sans-serif'),
+    heroX + 42,
+    heroY + 322,
+  );
   ctx.shadowBlur = 0;
 
   ctx.fillStyle = "#f1e7e9";
-  const fittedLocation = fitText(`📍  ${location}`, heroW - 84, 700, 28, 22);
-  ctx.font = fittedLocation.font;
-  ctx.fillText(fittedLocation.value, heroX + 42, heroY + 385);
-
-  if (note) {
-    ctx.fillStyle = "#d8c1c4";
-    const fittedNote = fitText(`📝  ${note}`, heroW - 84, 600, 21, 17);
-    ctx.font = fittedNote.font;
-    ctx.fillText(fittedNote.value, heroX + 42, heroY + 420);
-  }
+  ctx.font = '700 27px Inter, system-ui, sans-serif';
+  ctx.fillText(
+    clampText(`📍  ${location}`, heroW - 84, '700 27px Inter, system-ui, sans-serif'),
+    heroX + 42,
+    heroY + 385,
+  );
 
   // Per-person spotlight block remains in the exact same position/size.
   const feeX = heroX + 42;
@@ -596,14 +563,14 @@ const buildReminderImage = (match, now = new Date()) => {
   ctx.shadowBlur = 0;
 
   ctx.fillStyle = "#ff3b4b";
-  ctx.font = '850 20px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '900 19px Inter, system-ui, sans-serif';
   ctx.fillText("PER PERSON", feeX + 28, feeY + 44);
 
   // Red currency symbol, white amount.
   const currencySymbol = perPersonText.startsWith("৳") ? "৳" : "";
   const amountBody = currencySymbol ? perPersonText.slice(1) : perPersonText;
   ctx.fillStyle = "#ff3344";
-  ctx.font = '900 58px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '950 54px Inter, system-ui, sans-serif';
   ctx.fillText(currencySymbol, feeX + 28, feeY + 106);
   const symbolWidth = ctx.measureText(currencySymbol).width;
   ctx.fillStyle = "#ffffff";
@@ -611,19 +578,22 @@ const buildReminderImage = (match, now = new Date()) => {
 
   if (reminder.countdownText && !reminder.isPast) {
     ctx.fillStyle = "#f6eef0";
-    const fittedCountdown = fitText(`⏱  ${reminder.countdownText}`, heroW - 84, 650, 19, 16);
-    ctx.font = fittedCountdown.font;
-    ctx.fillText(fittedCountdown.value, heroX + 42, heroY + heroH - 24);
+    ctx.font = '700 20px Inter, system-ui, sans-serif';
+    ctx.fillText(
+      clampText(`⏱  ${reminder.countdownText}`, heroW - 84, '700 20px Inter, system-ui, sans-serif'),
+      heroX + 42,
+      heroY + heroH - 24,
+    );
   }
 
   // Keep the lower section clean: no large football graphic or ball-related effects.
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = '850 29px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '950 31px Inter, system-ui, sans-serif';
   ctx.textAlign = "center";
   ctx.fillText("SEE YOU ON THE FIELD ⚽", width / 2, 930);
   ctx.fillStyle = "#a98f94";
-  ctx.font = '650 15px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.font = '700 16px Inter, system-ui, sans-serif';
   ctx.fillText("TURFCLUB • MATCH NIGHT REMINDER", width / 2, 966);
   ctx.textAlign = "left";
 
@@ -1715,7 +1685,9 @@ function Matches({
       {cashOverviewOpen && (
         <CashOverviewScreen
           data={cashData}
+          matches={matches}
           onClose={() => setCashOverviewOpen(false)}
+          setAppError={setAppError}
         />
       )}
       {scheduleNotice && (
@@ -2309,7 +2281,6 @@ function buildReminderMessage(match, now = new Date()) {
     `📅 ${dateText}`,
     `🕘 ${timeText}`,
     `📍 ${location}`,
-    ...(String(match.note || "").trim() ? [`📝 Note: ${String(match.note).trim()}`] : []),
     `💰 Per Person: ${perPersonText}`,
   ];
   if (status.isPast) lines.push("", "The match has already been played.");
@@ -2505,125 +2476,32 @@ function ReminderModal({ match, onClose }) {
   );
 }
 
-function MatchPlayerSelector({ players, selected, onToggle, onClose }) {
-  useBodyScrollLock(true);
-  useEscapeHandler(true, onClose);
-  const [search, setSearch] = useState("");
-  const activeSelected = useMemo(() => new Set(selected), [selected]);
-  const filteredPlayers = useMemo(() => {
-    const normalized = search.trim().toLowerCase();
-    const list = sortPlayersByName(
-      (Array.isArray(players) ? players : []).filter(
-        (player) => isPlayerActive(player) || activeSelected.has(player.id),
-      ),
-    );
-    if (!normalized) return list;
-    return list.filter((player) =>
-      `${player.name || ""} ${playerPositionLabel(player)}`.toLowerCase().includes(normalized),
-    );
-  }, [players, search, activeSelected]);
-
-  return (
-    <OverlayPortal>
-      <div className="modal-backdrop player-selector-backdrop">
-        <section className="modal player-selector-modal" role="dialog" aria-modal="true" aria-labelledby="select-players-title">
-          <div className="modal-head player-selector-head">
-            <div>
-              <span className="eyebrow">SELECT PLAYERS</span>
-              <h2 id="select-players-title">Choose players</h2>
-              <p className="muted">{selected.length} {selected.length === 1 ? "player" : "players"} selected</p>
-            </div>
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close player selection">
-              <X />
-            </button>
-          </div>
-
-          <div className="player-selector-summary">
-            <Users size={16} />
-            <strong>{selected.length} {selected.length === 1 ? "player" : "players"} selected</strong>
-          </div>
-
-          <div className="player-search player-selector-search">
-            <Search size={15} />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search player..."
-              aria-label="Search player"
-              autoFocus
-            />
-            {search && (
-              <button type="button" className="search-clear" onClick={() => setSearch("")} aria-label="Clear player search">
-                <X size={14} />
-              </button>
-            )}
-          </div>
-
-          <div className="player-selector-list">
-            {filteredPlayers.map((player) => {
-              const isSelected = activeSelected.has(player.id);
-              return (
-                <button
-                  type="button"
-                  className={`player-selector-row ${isSelected ? "selected" : ""}`}
-                  key={player.id}
-                  onClick={() => onToggle(player.id)}
-                  aria-pressed={isSelected}
-                >
-                  <span className={`player-selector-check ${isSelected ? "checked" : ""}`} aria-hidden="true">
-                    {isSelected && <Check size={14} />}
-                  </span>
-                  <PlayerAvatar player={player} size="sm" />
-                  <span className="player-selector-name">
-                    <b>{player.name}</b>
-                    <small>{playerPositionLabel(player)}</small>
-                  </span>
-                </button>
-              );
-            })}
-            {!filteredPlayers.length && (
-              <div className="empty player-selector-empty">
-                <Search size={18} />
-                <h3>No players found</h3>
-                <p>Try another player name.</p>
-              </div>
-            )}
-          </div>
-
-          <div className="player-selector-footer">
-            <button type="button" className="primary full" onClick={onClose}>
-              Submit
-            </button>
-          </div>
-        </section>
-      </div>
-    </OverlayPortal>
-  );
-}
-
 function MatchModal({ players, match, onClose, setAppError, onDone }) {
   useBodyScrollLock(true);
   useEscapeHandler(true, onClose);
 
   const editing = !!match;
   const [date, setDate] = useState(match?.date || today());
-  const [startTime, setStartTime] = useState(match?.startTime || match?.time || currentTime());
-  const [endTime, setEndTime] = useState(match?.endTime || addOneHour(match?.startTime || match?.time || currentTime()));
+  const [startTime, setStartTime] = useState(
+    match?.startTime || match?.time || currentTime(),
+  );
+  const [endTime, setEndTime] = useState(
+    match?.endTime ||
+    addOneHour(match?.startTime || match?.time || currentTime()),
+  );
   const [amount, setAmount] = useState(String(match?.totalAmount ?? 0));
   const [teamAName, setTeamAName] = useState(match?.teamAName || "Team A");
   const [teamBName, setTeamBName] = useState(match?.teamBName || "Team B");
   const [location, setLocation] = useState(match?.location || "");
-  const [note, setNote] = useState(String(match?.note || "").slice(0, 20));
-  const [selected, setSelected] = useState(match?.participants?.map((p) => p.playerId) || []);
-  const [playerSelectorOpen, setPlayerSelectorOpen] = useState(false);
+  const [selected, setSelected] = useState(
+    match?.participants?.map((p) => p.playerId) || [],
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const toggle = (id) => {
-    setSelected((current) =>
-      current.includes(id) ? current.filter((x) => x !== id) : [...current, id],
+  const toggle = (id) =>
+    setSelected((s) =>
+      s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
     );
-  };
 
   const submit = async (event) => {
     event?.preventDefault?.();
@@ -2636,7 +2514,6 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
     if (!validDate || !validTime(startTime) || !validTime(endTime) || !validMoney || !Number.isFinite(numericAmount) || numericAmount <= 0 || selected.length === 0) {
       return setError("Enter a valid date, time, positive amount (up to 3 decimals), and at least one player.");
     }
-    const sanitizedNote = String(note || "").trim().slice(0, 20);
     const old = Array.isArray(match?.participants) ? match.participants : [];
     const participants = [...new Set(selected)].map((id) => ({
       playerId: id,
@@ -2654,7 +2531,6 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
           teamAName: teamAName.trim() || "Team A",
           teamBName: teamBName.trim() || "Team B",
           location: location.trim(),
-          note: sanitizedNote,
           participants,
           updatedAt: serverTimestamp(),
         });
@@ -2669,7 +2545,6 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
           teamAName: teamAName.trim() || "Team A",
           teamBName: teamBName.trim() || "Team B",
           location: location.trim(),
-          note: sanitizedNote,
           participants,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -2686,114 +2561,128 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
   };
 
   return (
-    <>
-      <OverlayPortal>
-        <div className="modal-backdrop">
-          <form className="modal match-modal create-match-modal" onSubmit={submit} noValidate>
-            <div className="modal-head">
-              <div>
-                <span className="eyebrow">{editing ? "EDIT MATCH" : "NEW MATCH"}</span>
-                <h2>{editing ? "Update match" : "Create match"}</h2>
-              </div>
-              <button type="button" className="icon-btn" onClick={onClose} aria-label="Close match dialog">
-                <X />
-              </button>
+    <OverlayPortal>
+      <div className="modal-backdrop">
+        <form className="modal match-modal" onSubmit={submit} noValidate>
+          <div className="modal-head">
+            <div>
+              <span className="eyebrow">
+                {editing ? "EDIT MATCH" : "NEW MATCH"}
+              </span>
+              <h2>{editing ? "Update match" : "Create match"}</h2>
             </div>
-
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close admin login">
+              <X />
+            </button>
+          </div>
+          <div className="form-grid-two">
             <label>
               Match date
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
             </label>
-
-            <div className="form-grid-two time-range-row">
-              <label>
-                Start time
-                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-              </label>
-              <div className="time-range-separator" aria-hidden="true">TO</div>
-              <label>
-                End time
-                <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
-              </label>
-            </div>
-
+            <label>
+              Start time
+              <input
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              />
+            </label>
+          </div>
+          <label>
+            End time
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+            />
+          </label>
+          <div className="form-grid-two">
             <label>
               Team A name
-              <input type="text" value={teamAName} onChange={(e) => setTeamAName(e.target.value)} maxLength={40} placeholder="Team A" />
+              <input
+                type="text"
+                value={teamAName}
+                onChange={(e) => setTeamAName(e.target.value)}
+                maxLength={40}
+                placeholder="Team A"
+              />
             </label>
-
             <label>
               Team B name
-              <input type="text" value={teamBName} onChange={(e) => setTeamBName(e.target.value)} maxLength={40} placeholder="Team B" />
+              <input
+                type="text"
+                value={teamBName}
+                onChange={(e) => setTeamBName(e.target.value)}
+                maxLength={40}
+                placeholder="Team B"
+              />
             </label>
-
-            <label className="location-field">
-              Turf / location
-              <span className="input-with-icon">
-                <MapPin size={15} aria-hidden="true" />
-                <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Bashundhara Turf, Dhaka" maxLength={120} autoComplete="street-address" />
-              </span>
-            </label>
-
-            <div className="form-grid-two amount-row">
-              <label>
-                Amount
-                <input
-                  type="number"
-                  min="0"
-                  inputMode="decimal"
-                  value={amount}
-                  onFocus={() => { if (amount === "0") setAmount(""); }}
-                  onChange={(e) => setAmount(normalizeNumericInput(e.target.value))}
-                  placeholder="0"
-                />
-              </label>
-              <label>
-                Note
-                <input
-                  type="text"
-                  value={note}
-                  maxLength={20}
-                  onChange={(e) => setNote(e.target.value.slice(0, 20))}
-                  placeholder="Optional note"
-                  autoComplete="off"
-                />
-                <span className="match-note-meta">Optional · {note.length}/20</span>
-              </label>
+          </div>
+          <label className="location-field">
+            Turf field location
+            <span className="input-with-icon">
+              <MapPin size={15} aria-hidden="true" />
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="e.g. Bashundhara Turf, Dhaka"
+                maxLength={120}
+                autoComplete="street-address"
+              />
+            </span>
+            <small className="field-hint">Add the venue so everyone knows where to play.</small>
+          </label>
+          <label>
+            Total match amount
+            <input
+              type="number"
+              min="0"
+              inputMode="decimal"
+              value={amount}
+              onFocus={() => { if (amount === "0") setAmount(""); }}
+              onChange={(e) => setAmount(normalizeNumericInput(e.target.value))}
+              placeholder="0"
+            />
+          </label>
+          <div className="selection-head">
+            <b>Select players</b>
+            <span>{selected.length} selected</span>
+          </div>
+          <div className="select-list">
+            {sortPlayersByName(players.filter((p) => isPlayerActive(p) || selected.includes(p.id))).map((p) => (
+              <button
+                type="button"
+                className={`select-player ${selected.includes(p.id) ? "selected" : ""}`}
+                key={p.id}
+                onClick={() => toggle(p.id)}
+              >
+                <PlayerAvatar player={p} size="sm" />
+                <span>{p.name}</span>
+                {selected.includes(p.id) && <Check size={17} />}
+              </button>
+            ))}
+          </div>
+          {selected.length > 0 && Number(amount) > 0 && (
+            <div className="per-preview">
+              Average share <b>{money(Number(amount) / selected.length)}</b>
             </div>
-
-            <button type="button" className="player-selector-trigger" onClick={() => setPlayerSelectorOpen(true)} aria-haspopup="dialog" aria-expanded={playerSelectorOpen}>
-              <span className="player-selector-trigger-icon"><Users size={17} /></span>
-              <span className="player-selector-trigger-copy">
-                <strong>Select players</strong>
-                <small>{selected.length} {selected.length === 1 ? "player" : "players"} selected</small>
-              </span>
-              <ChevronRight size={18} aria-hidden="true" />
-            </button>
-
-            {selected.length > 0 && Number(amount) > 0 && (
-              <div className="per-preview">
-                Average share <b>{money(Number(amount) / selected.length)}</b>
-              </div>
-            )}
-            {error && <div className="error">{error}</div>}
-            <button className="primary full create-match-submit" type="submit" disabled={busy}>
-              {busy ? "Saving..." : editing ? "Save changes" : "Create match"}
-            </button>
-          </form>
-        </div>
-      </OverlayPortal>
-      {playerSelectorOpen && (
-        <MatchPlayerSelector
-          players={players}
-          selected={selected}
-          onToggle={toggle}
-          onClose={() => setPlayerSelectorOpen(false)}
-        />
-      )}
-    </>
+          )}
+          {error && <div className="error">{error}</div>}
+          <button className="primary full" type="submit" disabled={busy}>
+            {busy ? "Saving..." : editing ? "Save changes" : "Create match"}
+          </button>
+        </form>
+      </div>
+    </OverlayPortal>
   );
 }
+
 
 function resultCompletedMatches(matches, now = new Date()) {
   return getMatchOrder(matches)
@@ -4595,7 +4484,7 @@ function getCashOverviewData(matches, players) {
 }
 
 
-function CashOverviewDuePlayers({ duePlayers = [] }) {
+function CashOverviewDuePlayers({ duePlayers = [], onOpen }) {
   const totalDue = duePlayers.reduce((sum, item) => sum + item.due, 0);
 
   return (
@@ -4606,6 +4495,9 @@ function CashOverviewDuePlayers({ duePlayers = [] }) {
           <h3>Outstanding player balances</h3>
           <p>{duePlayers.length ? `${duePlayers.length} ${duePlayers.length === 1 ? "player" : "players"}` : "Everyone is settled"}</p>
         </div>
+        {duePlayers.length > 0 && onOpen ? (
+          <button type="button" className="cash-detail-link" onClick={onOpen}>View all <ChevronRight size={14} /></button>
+        ) : null}
         <div className="due-players-total">
           <span>TOTAL DUE</span>
           <strong>{money(totalDue)}</strong>
@@ -4642,6 +4534,9 @@ function CashOverviewDuePlayers({ duePlayers = [] }) {
               </div>
             </div>
           ))}
+          {duePlayers.length > 3 && onOpen ? (
+            <div className="due-preview-more">+ {duePlayers.length - 3} more due players · <button type="button" onClick={onOpen}>View all <ChevronRight size={13} /></button></div>
+          ) : null}
         </div>
       ) : (
         <div className="due-players-empty">
@@ -4657,6 +4552,9 @@ function CashOverviewSummary({
   data,
   onOpenCollection,
   onOpenCost,
+  onOpenDue,
+  onOpenAdvance,
+  matchAdvances = [],
   title = "CASH OVERVIEW",
   subtitle = "Club cash",
 }) {
@@ -4702,7 +4600,8 @@ function CashOverviewSummary({
           <small>Available after match costs</small>
         </div>
       </div>
-      <CashOverviewDuePlayers duePlayers={data.duePlayers} />
+      <CashOverviewDuePlayers duePlayers={data.duePlayers} onOpen={onOpenDue} />
+      <MatchAdvancePreview records={matchAdvances} onOpen={onOpenAdvance} />
     </section>
   );
 }
@@ -4819,61 +4718,271 @@ function CashAuditScreen({ data, auditType, onBack, backLabel = "Back to cash ov
   );
 }
 
-function CashOverviewScreen({ data, onClose }) {
-  const [screen, setScreen] = useState("summary");
+function getMatchAdvanceAmount(match) {
+  const candidates = [match?.advanceAmount, match?.prebookAmount, match?.advance];
+  for (const value of candidates) {
+    const amount = finiteTaka(value);
+    if (amount > 0) return amount;
+  }
+  return 0;
+}
 
+function getMatchAdvanceNote(match) {
+  return String(match?.advanceNote ?? match?.prebookNote ?? match?.advanceSource ?? "").trim();
+}
+
+function getMatchAdvanceRecords(matches) {
+  const ordered = getMatchOrder(Array.isArray(matches) ? matches : []);
+  const matchNumbers = new Map(ordered.map((m, i) => [String(m?.id || i), i + 1]));
+  return ordered
+    .map((match) => ({
+      id: String(match?.id || ""),
+      match,
+      matchNumber: matchNumbers.get(String(match?.id || "")) || 0,
+      amount: getMatchAdvanceAmount(match),
+      note: getMatchAdvanceNote(match),
+      completed: isMatchCompleted(match),
+    }))
+    .filter((row) => row.amount > 0 || row.note);
+}
+
+function MatchAdvancePreview({ records = [], onOpen }) {
+  const upcoming = records
+    .filter((row) => !row.completed)
+    .sort((a, b) => getMatchSortKey(a.match).localeCompare(getMatchSortKey(b.match)));
+  const completed = records
+    .filter((row) => row.completed)
+    .sort((a, b) => getMatchSortKey(b.match).localeCompare(getMatchSortKey(a.match)));
+  const visible = [...upcoming.slice(0, 1), ...completed.slice(0, 1)];
+  const total = records.reduce((sum, row) => sum + row.amount, 0);
+
+  return (
+    <section className="cash-advance-preview" aria-labelledby="cash-advance-preview-title">
+      <div className="cash-advance-preview-head">
+        <div>
+          <div className="eyebrow" id="cash-advance-preview-title">MATCH ADVANCE</div>
+          <p>{records.length ? `${records.length} booking ${records.length === 1 ? "record" : "records"}` : "Pre-booking records"}</p>
+        </div>
+        {onOpen ? <button type="button" className="cash-detail-link" onClick={() => onOpen("all")}>View all <ChevronRight size={14} /></button> : null}
+      </div>
+      {visible.length ? (
+        <div className="cash-advance-preview-list">
+          {visible.map((row) => (
+            <div className="cash-advance-preview-row" key={row.id}>
+              <div>
+                <b>Match {row.matchNumber} · {row.match?.date ? dateLabel(row.match.date) : "—"}</b>
+                <span>{getMatchupLabel(row.match)}</span>
+                {row.note ? <small>📝 {row.note}</small> : null}
+              </div>
+              <strong>{money(row.amount)}</strong>
+            </div>
+          ))}
+          {(upcoming.length > 0 || completed.length > 0) && onOpen ? (
+            <div className="cash-advance-preview-more">
+              {upcoming.length > 0 ? <button type="button" onClick={() => onOpen("upcoming")}>View upcoming ({upcoming.length}) <ChevronRight size={13} /></button> : null}
+              {completed.length > 0 ? <button type="button" onClick={() => onOpen("completed")}>View history ({completed.length}) <ChevronRight size={13} /></button> : null}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="cash-advance-preview-empty">No match advance records yet.</div>
+      )}
+      {records.length ? <div className="cash-advance-preview-total"><span>TOTAL ADVANCE</span><strong>{money(total)}</strong></div> : null}
+    </section>
+  );
+}
+
+function MatchAdvanceForm({ matches, initialMatch, onClose, setAppError }) {
+  useBodyScrollLock(true);
+  useEscapeHandler(true, onClose);
+  const [matchId, setMatchId] = useState(initialMatch?.id || matches[0]?.id || "");
+  const selectedMatch = matches.find((m) => String(m.id) === String(matchId)) || initialMatch || null;
+  const [amount, setAmount] = useState(selectedMatch ? String(getMatchAdvanceAmount(selectedMatch) || "") : "");
+  const [note, setNote] = useState(selectedMatch ? getMatchAdvanceNote(selectedMatch) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = async (e) => {
+    e.preventDefault();
+    if (busy || !selectedMatch) return;
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value < 0) return setError("Enter a valid advance amount.");
+    if (note.length > 40) return setError("Source / note must be 40 characters or fewer.");
+    setBusy(true); setError("");
+    try {
+      await updateDoc(doc(db, "matches", selectedMatch.id), {
+        advanceAmount: value,
+        advanceNote: note.trim().slice(0, 40),
+        updatedAt: serverTimestamp(),
+      });
+      onClose();
+    } catch (err) {
+      const message = `Could not save match advance: ${err.message}`;
+      setError(message); setAppError?.(message);
+    } finally { setBusy(false); }
+  };
+  return (
+    <OverlayPortal>
+      <div className="modal-backdrop">
+        <form className="modal cash-advance-form" onSubmit={save}>
+          <div className="modal-head">
+            <div><span className="eyebrow">MATCH ADVANCE</span><h2>{initialMatch ? "Edit advance" : "Add advance"}</h2></div>
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><X /></button>
+          </div>
+          <label>Match
+            <select value={matchId} onChange={(e) => {
+              setMatchId(e.target.value);
+              const next = matches.find((m) => String(m.id) === e.target.value);
+              setAmount(next ? String(getMatchAdvanceAmount(next) || "") : "");
+              setNote(next ? getMatchAdvanceNote(next) : "");
+            }}>
+              {matches.map((m, i) => <option key={m.id} value={m.id}>Match {i + 1} · {m.date ? dateLabel(m.date) : "—"} · {getMatchupLabel(m)}</option>)}
+            </select>
+          </label>
+          <label>Advance amount
+            <input type="number" min="0" step="0.001" inputMode="decimal" value={amount} onChange={(e) => setAmount(normalizeNumericInput(e.target.value))} placeholder="৳0" />
+          </label>
+          <label>Source / note
+            <input type="text" maxLength={40} value={note} onChange={(e) => setNote(e.target.value.slice(0, 40))} placeholder="Ali — turf booking" />
+            <small className="field-hint">{note.length} / 40</small>
+          </label>
+          {error ? <div className="error">{error}</div> : null}
+          <button className="primary full" type="submit" disabled={busy}>{busy ? "Saving..." : "Save advance"}</button>
+        </form>
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function MatchAdvanceScreen({ matches, onBack, setAppError, initialFilter = "all" }) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState(initialFilter);
+  const [editing, setEditing] = useState(null);
+  useBodyScrollLock(true);
+  useEscapeHandler(true, onBack);
+  const records = useMemo(() => getMatchAdvanceRecords(matches), [matches]);
+  const orderedMatches = useMemo(() => getMatchOrder(matches), [matches]);
+  const matchNumbers = useMemo(() => new Map(orderedMatches.map((m, i) => [String(m.id), i + 1])), [orderedMatches]);
+  const filtered = useMemo(() => {
+    const term = normalizeMatchSearchText(query);
+    return records.filter((row) => {
+      if (filter === "upcoming" && row.completed) return false;
+      if (filter === "completed" && !row.completed) return false;
+      if (!term) return true;
+      if (/^\d+$/.test(query.trim())) return String(row.matchNumber) === query.trim();
+      const raw = String(row.match?.date || "");
+      const [year = "", month = "", day = ""] = raw.split("-");
+      const aliases = [
+        String(row.matchNumber), `match ${row.matchNumber}`, raw,
+        row.match?.date ? dateLabel(row.match.date) : "",
+        `${day} ${month} ${year}`, `${day}/${month}/${year}`, `${year}-${month}-${day}`,
+      ].map(normalizeMatchSearchText);
+      return aliases.some((value) => value.includes(term));
+    }).sort((a, b) => {
+      const byStatus = Number(a.completed) - Number(b.completed);
+      if (filter === "all" && byStatus !== 0) return byStatus;
+      return filter === "completed"
+        ? getMatchSortKey(b.match).localeCompare(getMatchSortKey(a.match))
+        : getMatchSortKey(a.match).localeCompare(getMatchSortKey(b.match));
+    });
+  }, [records, query, filter]);
+  const total = filtered.reduce((sum, row) => sum + row.amount, 0);
+  return (
+    <OverlayPortal>
+      <div className="account-cash-audit-screen detail-page cash-advance-screen">
+        <header className="account-cash-audit-screen-head">
+          <button type="button" className="account-cash-audit-back" onClick={onBack} aria-label="Back to cash overview"><ChevronLeft size={20} /></button>
+          <div className="account-cash-audit-screen-title"><span className="eyebrow">MATCH ADVANCE</span><strong>Pre-booking records</strong><p>{records.length} records · searchable by match number or date</p></div>
+        </header>
+        <main className="account-cash-audit-screen-content">
+          <div className="cash-detail-toolbar">
+            <div className="cash-detail-search"><Search size={15} /><input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search match number or date..." aria-label="Search match number or date" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={14} /></button> : null}</div>
+            <div className="cash-filter-row">{[["all","All"],["upcoming","Upcoming"],["completed","Completed"]].map(([value,label]) => <button key={value} type="button" className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>
+            <button type="button" className="primary compact cash-add-advance" onClick={() => setEditing({})}><Plus size={15} /> Add advance</button>
+          </div>
+          {filtered.length ? <div className="cash-advance-list">{filtered.map((row) => <article className="cash-advance-card" key={row.id}>
+            <div className="cash-advance-card-head"><div><span>MATCH {row.matchNumber}</span><strong>{row.match?.date ? dateLabel(row.match.date) : "DATE UNAVAILABLE"}</strong></div><b>{money(row.amount)}</b></div>
+            <p className="cash-advance-matchup">{getMatchupLabel(row.match)}</p>
+            <p className="cash-advance-meta">{row.match?.startTime || row.match?.time || "—"}{row.match?.endTime ? ` — ${row.match.endTime}` : ""} · {row.match?.location || "Location unavailable"}</p>
+            {row.note ? <p className="cash-advance-note">📝 {row.note}</p> : null}
+            <div className="cash-advance-card-actions"><span>{row.completed ? "COMPLETED" : "NEXT UPCOMING"}</span><button type="button" onClick={() => setEditing(row.match)}>Edit</button></div>
+          </article>)}</div> : <div className="account-cash-audit-empty"><strong>NO MATCH ADVANCE FOUND</strong><p>{query ? <>Search: <b>{query}</b><br />No matching match number or date was found.</> : "No pre-booking records match this filter."}</p></div>}
+        </main>
+        <footer className="account-cash-audit-screen-total"><span>TOTAL ADVANCE</span><strong>{money(total)}</strong></footer>
+        {editing ? <MatchAdvanceForm matches={matches} initialMatch={editing.id ? editing : null} onClose={() => setEditing(null)} setAppError={setAppError} /> : null}
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function DuePlayersScreen({ duePlayers, onBack }) {
+  const [query, setQuery] = useState("");
+  useBodyScrollLock(true);
+  useEscapeHandler(true, onBack);
+  const filtered = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return duePlayers.filter((item) => !term || String(item.player?.name || "").toLowerCase().includes(term));
+  }, [duePlayers, query]);
+  const total = filtered.reduce((sum, item) => sum + item.due, 0);
+  return (
+    <OverlayPortal>
+      <div className="account-cash-audit-screen detail-page due-full-screen">
+        <header className="account-cash-audit-screen-head">
+          <button type="button" className="account-cash-audit-back" onClick={onBack} aria-label="Back to cash overview"><ChevronLeft size={20} /></button>
+          <div className="account-cash-audit-screen-title"><span className="eyebrow">DUE PLAYERS</span><strong>Outstanding player balances</strong><p>{duePlayers.length} due {duePlayers.length === 1 ? "player" : "players"}</p></div>
+        </header>
+        <main className="account-cash-audit-screen-content">
+          <div className="cash-detail-search"><Search size={15} /><input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search player name..." aria-label="Search player name" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={14} /></button> : null}</div>
+          {filtered.length ? <div className="due-full-list">{filtered.map(({ player, due, breakdown }) => <article className="due-full-card" key={player.id}>
+            <div className="due-full-head"><div><strong>{player.name}</strong><span>Outstanding balance</span></div><b>{money(due)}</b></div>
+            <div>{breakdown.map((source) => <div className="due-full-source" key={`${player.id}-${source.match?.id || source.matchNumber}`}><div><b>Match {source.matchNumber} · {source.match?.date ? dateLabel(source.match.date) : "—"}</b><span>{getMatchupLabel(source.match)}</span></div><strong>{money(source.amount)}</strong></div>)}</div>
+          </article>)}</div> : <div className="account-cash-audit-empty"><strong>NO DUE PLAYER FOUND</strong><p>{query ? <>Search: <b>{query}</b><br />No player with an outstanding balance matches this search.</> : "Everyone is settled."}</p></div>}
+        </main>
+        <footer className="account-cash-audit-screen-total"><span>TOTAL DUE</span><strong>{money(total)}</strong></footer>
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function CashOverviewScreen({ data, matches, onClose, setAppError }) {
+  const [screen, setScreen] = useState("summary");
+  const matchAdvances = useMemo(() => getMatchAdvanceRecords(matches), [matches]);
   useEscapeHandler(screen === "summary", onClose);
   useBodyScrollLock(true);
-
-  if (screen !== "summary") {
-    return (
-      <CashAuditScreen
-        data={data}
-        auditType={screen}
-        onBack={() => setScreen("summary")}
-        backLabel="Back to cash overview"
-      />
-    );
-  }
-
+  if (screen === "advance") return <MatchAdvanceScreen matches={matches} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="all" />;
+  if (screen === "upcoming") return <MatchAdvanceScreen matches={matches} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="upcoming" />;
+  if (screen === "completed") return <MatchAdvanceScreen matches={matches} onBack={() => setScreen("summary")} setAppError={setAppError} initialFilter="completed" />;
+  if (screen === "due") return <DuePlayersScreen duePlayers={data.duePlayers} onBack={() => setScreen("summary")} />;
+  if (screen === "collection" || screen === "cost") return <CashAuditScreen data={data} auditType={screen} onBack={() => setScreen("summary")} backLabel="Back to cash overview" />;
   return (
     <OverlayPortal>
       <div className="account-cash-audit-screen">
         <header className="account-cash-audit-screen-head">
-          <button
-            type="button"
-            className="account-cash-audit-back"
-            onClick={onClose}
-            aria-label="Back to Match Centre"
-            title="Back to Match Centre"
-          >
-            <ChevronLeft size={20} />
-          </button>
-          <div className="account-cash-audit-screen-title">
-            <span className="eyebrow">CASH OVERVIEW</span>
-            <strong>Club cash</strong>
-            <p>Played matches only</p>
-          </div>
+          <button type="button" className="account-cash-audit-back" onClick={onClose} aria-label="Back to Match Centre" title="Back to Match Centre"><ChevronLeft size={20} /></button>
+          <div className="account-cash-audit-screen-title"><span className="eyebrow">CASH OVERVIEW</span><strong>Club cash</strong><p>Played matches only</p></div>
         </header>
-
         <main className="account-cash-audit-screen-content cash-overview-screen-content">
-          <CashOverviewSummary
-            data={data}
-            onOpenCollection={() => setScreen("collection")}
-            onOpenCost={() => setScreen("cost")}
-            subtitle="Club cash"
-          />
+          <CashOverviewSummary data={data} onOpenCollection={() => setScreen("collection")} onOpenCost={() => setScreen("cost")} onOpenDue={() => setScreen("due")} onOpenAdvance={(view) => setScreen(view === "upcoming" ? "upcoming" : view === "completed" ? "completed" : "advance")} matchAdvances={matchAdvances} subtitle="Club cash" />
         </main>
       </div>
     </OverlayPortal>
   );
 }
 
-function Account({ profile, players, logout }) {
+function Account({ profile, players, matches, logout }) {
+  const [cashAuditOpen, setCashAuditOpen] = useState(null);
+
   const aliPlayer = useMemo(
     () => players.find((player) => String(player?.name || "").trim().toLowerCase() === "ali") || null,
     [players],
   );
+
+  const cashData = useMemo(
+    () => getCashOverviewData(matches, players),
+    [matches, players],
+  );
+  const { totalCollected, totalCost, cashInHand } = cashData;
+
+  useBodyScrollLock(Boolean(cashAuditOpen));
 
   return (
     <section className="page account-page">
@@ -4891,22 +5000,25 @@ function Account({ profile, players, logout }) {
         </div>
       </div>
 
-      <div className="account-logout-wrap">
-        <button
-          type="button"
-          className="leave-pitch-button"
-          onClick={logout}
-          aria-label="Leave the pitch and sign out"
-          title="Leave the pitch"
-        >
-          <span className="leave-pitch-main">
-            <LogOut size={17} aria-hidden="true" />
-            <span>LEAVE THE PITCH</span>
-          </span>
-          <span className="leave-pitch-arrow" aria-hidden="true">→</span>
-        </button>
-        <p className="leave-pitch-microcopy">Until the next kickoff.</p>
-      </div>
+      <CashOverviewSummary
+        data={cashData}
+        onOpenCollection={() => setCashAuditOpen("collection")}
+        onOpenCost={() => setCashAuditOpen("cost")}
+      />
+
+      <button className="danger-button" onClick={logout}>
+        <LogOut size={18} /> Sign out
+      </button>
+
+      {cashAuditOpen && (
+        <CashAuditScreen
+          data={cashData}
+          auditType={cashAuditOpen}
+          onBack={() => setCashAuditOpen(null)}
+          backLabel="Back to account"
+        />
+      )}
+
     </section>
   );
 }
