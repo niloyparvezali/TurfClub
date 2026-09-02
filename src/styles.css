@@ -5704,8 +5704,26 @@ button, [role="button"], .directory-row { min-height: 44px; }
 /* Create Match — compact mobile-first form and full-screen player selector */
 .create-match-modal{
   width:min(100%,560px);
+  max-width:100%;
+  box-sizing:border-box;
   max-height:calc(100dvh - 24px);
   overflow-y:auto;
+  overflow-x:hidden;
+  min-width:0;
+}
+.create-match-modal > *,
+.create-match-modal label,
+.create-match-modal .form-grid-two,
+.create-match-modal .player-selector-trigger{
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+}
+.create-match-modal input,
+.create-match-modal button{
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
 }
 .create-match-modal label{
   margin:9px 0;

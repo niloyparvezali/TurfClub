@@ -253,6 +253,21 @@ const buildUpcomingScheduleImage = (matches, now = new Date()) => {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
 
+  // Keep right-aligned financial values inside a deliberate safe area.
+  const fitScheduleText = (text, maxWidth, weight, baseSize, minSize = 20) => {
+    const value = String(text || "");
+    let size = baseSize;
+    while (size > minSize) {
+      ctx.font = `${weight} ${size}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
+      if (ctx.measureText(value).width <= maxWidth) {
+        return { value, size, font: ctx.font };
+      }
+      size -= 1;
+    }
+    ctx.font = `${weight} ${minSize}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
+    return { value, size: minSize, font: ctx.font };
+  };
+
   ctx.fillStyle = "#06100b";
   ctx.fillRect(0, 0, width, height);
   const glow = ctx.createRadialGradient(width / 2, 0, 20, width / 2, 0, 620);
@@ -301,17 +316,23 @@ const buildUpcomingScheduleImage = (matches, now = new Date()) => {
     ctx.font = '600 24px Inter, system-ui, sans-serif';
     ctx.fillText(`📍  ${location}`, padding + 28, y + 137);
 
+    // Both label and amount share the same inset right edge. The amount is
+    // fitted before drawing so long decimal values never touch the card border.
+    const cardRight = width - padding;
+    const amountRight = cardRight - 28;
+    const amountLeft = padding + 28;
+    const amountSafeWidth = Math.max(80, amountRight - amountLeft);
+
     ctx.textAlign = "right";
     ctx.fillStyle = "#91a397";
     ctx.font = '700 18px Inter, system-ui, sans-serif';
-    ctx.fillText("PER PERSON", width - padding - 28, y + 48);
+    ctx.fillText("PER PERSON", amountRight, y + 48);
+
+    const amountText = perPerson == null ? "N/A" : money(perPerson);
+    const fittedAmount = fitScheduleText(amountText, amountSafeWidth, 900, 32, 22);
     ctx.fillStyle = "#b7ff4a";
-    ctx.font = '900 32px Inter, system-ui, sans-serif';
-    ctx.fillText(
-      perPerson == null ? "N/A" : money(perPerson),
-      width - padding - 28,
-      y + 91,
-    );
+    ctx.font = fittedAmount.font;
+    ctx.fillText(fittedAmount.value, amountRight, y + 91);
     ctx.textAlign = "left";
   });
 
