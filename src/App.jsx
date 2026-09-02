@@ -26,6 +26,7 @@ import {
   MapPin,
   Info,
   Download,
+  LockKeyhole,
 } from "lucide-react";
 import { auth, db, firebaseMissingConfig } from "./firebase";
 import { formatMoney, calculatePlayerMatchFee, calculatePlayerMatchPayment, calculatePlayerMatchFinancials, calculatePlayerBalance, getPlayerFinancials } from "./financial";
