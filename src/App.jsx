@@ -9,6 +9,7 @@ import {
   ChevronDown,
   CircleUserRound,
   ClipboardList,
+  Copy,
   Check,
   Eye,
   LogIn,
@@ -21,10 +22,10 @@ import {
   UserPlus,
   Users,
   X,
-  LockKeyhole,
   Search,
   MapPin,
   Info,
+  Download,
 } from "lucide-react";
 import { auth, db, firebaseMissingConfig } from "./firebase";
 import { formatMoney, calculatePlayerMatchFee, calculatePlayerMatchPayment, calculatePlayerMatchFinancials, calculatePlayerBalance, getPlayerFinancials } from "./financial";
@@ -162,6 +163,451 @@ const getNextMatch = (list, now = new Date()) =>
       return start && start.getTime() > now.getTime();
     })
     .sort((a, b) => getMatchDateTime(a) - getMatchDateTime(b))[0] || null;
+
+const getUpcomingMatches = (matches, now = new Date()) =>
+  [...matches]
+    .filter((match) => {
+      const start = getMatchDateTime(match);
+      return start?.getTime() > now.getTime();
+    })
+    .sort((a, b) => getMatchDateTime(a).getTime() - getMatchDateTime(b).getTime());
+
+const fullScheduleDateLabel = (value) => {
+  if (!value) return "";
+  return new Date(`${value}T00:00:00`).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+};
+
+const getUpcomingScheduleDetails = (matches, now = new Date()) =>
+  getUpcomingMatches(matches, now).map((match) => {
+    const participants = Array.isArray(match.participants) ? match.participants : [];
+    const perPerson = participants.length
+      ? Number(match.totalAmount || 0) / participants.length
+      : null;
+    return {
+      match,
+      date: fullScheduleDateLabel(match.date),
+      startTime: timeLabel(match.startTime || match.time),
+      endTime: match.endTime ? timeLabel(match.endTime) : "",
+      location: String(match.location || "Location unavailable"),
+      perPerson,
+    };
+  });
+
+const buildUpcomingScheduleMessage = (matches, now = new Date()) => {
+  const upcoming = getUpcomingScheduleDetails(matches, now);
+  const lines = ["⚽ TURFCLUB — UPCOMING MATCHES", ""];
+  upcoming.forEach(({ date, startTime, endTime, location, perPerson }, index) => {
+    lines.push(date);
+    lines.push(endTime ? `${startTime} to ${endTime}` : startTime);
+    lines.push(`📍 ${location}`);
+    lines.push(`💰 Per Person: ${perPerson == null ? "N/A" : money(perPerson)}`);
+    if (index < upcoming.length - 1) lines.push("");
+  });
+  lines.push("", "See you on the field! ⚽");
+  return { text: lines.join("\n"), matches: upcoming };
+};
+
+const copyTextToClipboard = async (text) => {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.style.position = "fixed";
+      helper.style.opacity = "0";
+      helper.setAttribute("readonly", "");
+      document.body.appendChild(helper);
+      helper.focus();
+      helper.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(helper);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
+};
+
+const buildUpcomingScheduleImage = (matches, now = new Date()) => {
+  const details = getUpcomingScheduleDetails(matches, now);
+  const width = 1080;
+  const padding = 72;
+  const blockHeight = 190;
+  const gap = 20;
+  const headerHeight = 250;
+  const footerHeight = 150;
+  const height = Math.max(
+    1350,
+    headerHeight + footerHeight + details.length * blockHeight +
+      Math.max(0, details.length - 1) * gap + padding * 2,
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#06100b";
+  ctx.fillRect(0, 0, width, height);
+  const glow = ctx.createRadialGradient(width / 2, 0, 20, width / 2, 0, 620);
+  glow.addColorStop(0, "#173b26");
+  glow.addColorStop(1, "#06100b");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, width, Math.min(height, 620));
+
+  ctx.fillStyle = "#b7ff4a";
+  ctx.font = '800 24px Inter, system-ui, sans-serif';
+  ctx.fillText("TURFCLUB", padding, 82);
+  ctx.fillStyle = "#f4f7f4";
+  ctx.font = '900 58px Inter, system-ui, sans-serif';
+  ctx.fillText("UPCOMING MATCHES", padding, 155);
+  ctx.fillStyle = "#91a397";
+  ctx.font = '500 22px Inter, system-ui, sans-serif';
+  ctx.fillText(
+    `${details.length} upcoming match${details.length === 1 ? "" : "es"}`,
+    padding,
+    198,
+  );
+
+  details.forEach(({ date, startTime, endTime, location, perPerson }, index) => {
+    const y = headerHeight + index * (blockHeight + gap);
+    ctx.fillStyle = "#0d1b14";
+    ctx.strokeStyle = "#20382a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(padding, y, width - padding * 2, blockHeight, 24);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#b7ff4a";
+    ctx.font = '800 30px Inter, system-ui, sans-serif';
+    ctx.fillText(date.toUpperCase(), padding + 28, y + 48);
+
+    ctx.fillStyle = "#f4f7f4";
+    ctx.font = '900 38px Inter, system-ui, sans-serif';
+    ctx.fillText(
+      endTime ? `${startTime} to ${endTime}` : startTime,
+      padding + 28,
+      y + 96,
+    );
+
+    ctx.fillStyle = "#91a397";
+    ctx.font = '600 24px Inter, system-ui, sans-serif';
+    ctx.fillText(`📍  ${location}`, padding + 28, y + 137);
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#91a397";
+    ctx.font = '700 18px Inter, system-ui, sans-serif';
+    ctx.fillText("PER PERSON", width - padding - 28, y + 48);
+    ctx.fillStyle = "#b7ff4a";
+    ctx.font = '900 32px Inter, system-ui, sans-serif';
+    ctx.fillText(
+      perPerson == null ? "N/A" : money(perPerson),
+      width - padding - 28,
+      y + 91,
+    );
+    ctx.textAlign = "left";
+  });
+
+  ctx.fillStyle = "#b7ff4a";
+  ctx.font = '900 25px Inter, system-ui, sans-serif';
+  ctx.textAlign = "center";
+  ctx.fillText("SEE YOU ON THE FIELD ⚽", width / 2, height - 78);
+  ctx.fillStyle = "#53665a";
+  ctx.font = '600 16px Inter, system-ui, sans-serif';
+  ctx.fillText("TURFCLUB • UPCOMING MATCH SCHEDULE", width / 2, height - 42);
+  ctx.textAlign = "left";
+  return canvas;
+};
+
+const buildReminderImage = (match, now = new Date()) => {
+  const reminder = buildReminderMessage(match, now);
+  const width = 1080;
+  const height = 1080;
+  const padding = 78;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  const fitText = (text, maxWidth, weight, baseSize, minSize = 26, family = 'Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif') => {
+    const value = String(text || "");
+    let size = baseSize;
+    while (size > minSize) {
+      ctx.font = `${weight} ${size}px ${family}`;
+      if (ctx.measureText(value).width <= maxWidth) return { value, size, font: ctx.font };
+      size -= 1;
+    }
+    ctx.font = `${weight} ${minSize}px ${family}`;
+    return { value, size: minSize, font: ctx.font };
+  };
+
+  const cleanNote = (value) => String(value || "").trim().replace(/\s*,\s*/g, ", ");
+
+  // Red + black match-night visual system. Layout and information hierarchy remain unchanged.
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0, 0, width, height);
+
+  // Deep crimson stadium atmosphere.
+  const topGlow = ctx.createRadialGradient(width * 0.7, 35, 10, width * 0.7, 35, 700);
+  topGlow.addColorStop(0, "#6f1119");
+  topGlow.addColorStop(0.35, "#2a090d");
+  topGlow.addColorStop(1, "#050505");
+  ctx.fillStyle = topGlow;
+  ctx.fillRect(0, 0, width, 780);
+
+  const bottomGlow = ctx.createRadialGradient(width * 0.15, height * 0.9, 30, width * 0.15, height * 0.9, 430);
+  bottomGlow.addColorStop(0, "#451016");
+  bottomGlow.addColorStop(1, "#050505");
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = bottomGlow;
+  ctx.fillRect(0, 720, width, height - 720);
+  ctx.globalAlpha = 1;
+
+  // Subtle stadium floodlights.
+  const lightSpots = [
+    { x: 90, y: 30, r: 210, alpha: 0.13 },
+    { x: width - 100, y: 20, r: 260, alpha: 0.15 },
+  ];
+  lightSpots.forEach(({ x, y, r, alpha }) => {
+    const g = ctx.createRadialGradient(x, y, 4, x, y, r);
+    g.addColorStop(0, `rgba(255,220,220,${alpha + 0.08})`);
+    g.addColorStop(0.22, `rgba(255,60,72,${alpha})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, width, 380);
+  });
+
+  // Stadium-light bars and restrained motion streaks.
+  ctx.save();
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = "#ff3141";
+  ctx.fillRect(width - 270, 0, 184, 5);
+  ctx.fillRect(width - 325, 15, 260, 2);
+  ctx.fillRect(78, 16, 210, 2);
+  ctx.fillStyle = "#7b1019";
+  ctx.fillRect(78, 29, 150, 2);
+  ctx.restore();
+
+  // Subtle pitch-line texture in the lower field area.
+  ctx.save();
+  ctx.globalAlpha = 0.15;
+  ctx.strokeStyle = "#7a1a23";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(width / 2, height + 70, 430, 215, 0, Math.PI, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(150, 1115);
+  ctx.lineTo(width - 150, 1115);
+  ctx.stroke();
+  for (let i = 0; i < 8; i += 1) {
+    const y = 1050 + i * 34;
+    ctx.beginPath();
+    ctx.moveTo(120, y);
+    ctx.lineTo(width - 120, y + 70);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Small premium red particles.
+  const particles = [
+    [118, 175, 2], [946, 182, 2], [1002, 288, 1.5], [96, 420, 1.5],
+    [940, 520, 2], [175, 790, 1.5], [900, 850, 1.5], [1005, 1030, 2],
+    [110, 1065, 1.5], [860, 1085, 1.5],
+  ];
+  ctx.save();
+  particles.forEach(([x, y, r], i) => {
+    ctx.globalAlpha = 0.18 + (i % 3) * 0.05;
+    ctx.fillStyle = "#ff4250";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+
+  const dateText = new Date(`${match.date}T00:00:00`).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).toUpperCase();
+  const startTime = timeLabel(match.startTime || match.time);
+  const endTime = match.endTime ? timeLabel(match.endTime) : "";
+  const timeText = endTime ? `${startTime} — ${endTime}` : startTime;
+  const location = String(match.location || "Turf field").trim() || "Turf field";
+  const note = cleanNote(String(match.note || "").slice(0, 20));
+  const perPerson = match.participants?.length
+    ? Number(match.totalAmount || 0) / match.participants.length
+    : null;
+  const perPersonText = perPerson === null ? "N/A" : money(perPerson);
+  const matchup = getMatchupLabel(match);
+
+  // Brand + visual cue.
+  ctx.fillStyle = "#ffffff";
+  ctx.font = '900 44px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.fillText("TURFCLUB", padding, 92);
+
+  ctx.fillStyle = "#ff3344";
+  ctx.font = '800 19px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.fillText("MATCH NIGHT", padding, 126);
+
+  // Single-match hero frame: same size/placement, red-black visual treatment only.
+  const heroX = padding;
+  const heroY = 205;
+  const heroW = width - padding * 2;
+  const heroH = 650;
+  const heroGradient = ctx.createLinearGradient(heroX, heroY, heroX + heroW, heroY + heroH);
+  heroGradient.addColorStop(0, "#161012");
+  heroGradient.addColorStop(0.48, "#0d0b0c");
+  heroGradient.addColorStop(1, "#1c0c0f");
+  ctx.fillStyle = heroGradient;
+  ctx.strokeStyle = "#9f1e2a";
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "rgba(255,42,58,0.28)";
+  ctx.shadowBlur = 18;
+  ctx.beginPath();
+  ctx.roundRect(heroX, heroY, heroW, heroH, 34);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Red edge lighting.
+  const edgeGradient = ctx.createLinearGradient(heroX, heroY, heroX, heroY + heroH);
+  edgeGradient.addColorStop(0, "#ff3647");
+  edgeGradient.addColorStop(0.55, "#9f1e2a");
+  edgeGradient.addColorStop(1, "#4a0f16");
+  ctx.fillStyle = edgeGradient;
+  ctx.fillRect(heroX, heroY + 42, 7, heroH - 84);
+  ctx.fillStyle = "#7e1822";
+  ctx.fillRect(heroX + heroW - 7, heroY + 42, 7, heroH - 84);
+
+  ctx.fillStyle = "#ff3c4e";
+  ctx.font = '800 21px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.fillText("MATCH REMINDER", heroX + 42, heroY + 64);
+
+  // Matchup stays in the same hero position, but scales responsively and
+  // keeps Bengali-capable fallbacks so long team names never clip.
+  const matchupMaxWidth = heroW - 84;
+  const matchupParts = matchup.split(/(\s+vs\s+)/i);
+  let matchupSize = 72;
+  if (matchupParts.length >= 3) {
+    for (; matchupSize >= 38; matchupSize -= 1) {
+      ctx.font = `950 ${matchupSize}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
+      const totalWidth = matchupParts.reduce((sum, part) => sum + ctx.measureText(part).width, 0);
+      if (totalWidth <= matchupMaxWidth) break;
+    }
+    let cursorX = heroX + 42;
+    matchupParts.forEach((part) => {
+      const isVs = /^\s*vs\s*$/i.test(part);
+      ctx.font = `950 ${matchupSize}px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif`;
+      ctx.fillStyle = isVs ? "#ff3344" : "#ffffff";
+      ctx.fillText(part, cursorX, heroY + 150);
+      cursorX += ctx.measureText(part).width;
+    });
+  } else {
+    const fitted = fitText(matchup, matchupMaxWidth, 950, 72, 38);
+    ctx.font = fitted.font;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(fitted.value, heroX + 42, heroY + 150);
+  }
+
+  // Subtle aggressive divider accent beneath matchup.
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = "#67131c";
+  ctx.beginPath();
+  ctx.moveTo(heroX + 42, heroY + 172);
+  ctx.lineTo(heroX + 300, heroY + 165);
+  ctx.lineTo(heroX + 245, heroY + 178);
+  ctx.lineTo(heroX + 42, heroY + 184);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  ctx.fillStyle = "#ff3a49";
+  ctx.font = '950 39px Inter, system-ui, sans-serif';
+  ctx.fillText(dateText, heroX + 42, heroY + 238);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.shadowColor = "rgba(255,52,68,0.22)";
+  ctx.shadowBlur = 10;
+  const fittedTime = fitText(timeText, heroW - 84, 900, 52, 34);
+  ctx.font = fittedTime.font;
+  ctx.fillText(fittedTime.value, heroX + 42, heroY + 322);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = "#f1e7e9";
+  const fittedLocation = fitText(`📍  ${location}`, heroW - 84, 700, 28, 22);
+  ctx.font = fittedLocation.font;
+  ctx.fillText(fittedLocation.value, heroX + 42, heroY + 385);
+
+  if (note) {
+    ctx.fillStyle = "#d8c1c4";
+    const fittedNote = fitText(`📝  ${note}`, heroW - 84, 600, 21, 17);
+    ctx.font = fittedNote.font;
+    ctx.fillText(fittedNote.value, heroX + 42, heroY + 420);
+  }
+
+  // Per-person spotlight block remains in the exact same position/size.
+  const feeX = heroX + 42;
+  const feeY = heroY + 430;
+  const feeW = heroW - 84;
+  const feeH = 150;
+  const feeGradient = ctx.createLinearGradient(feeX, feeY, feeX + feeW, feeY);
+  feeGradient.addColorStop(0, "#140c0f");
+  feeGradient.addColorStop(1, "#220d12");
+  ctx.fillStyle = feeGradient;
+  ctx.strokeStyle = "#a62430";
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = "rgba(255,44,60,0.20)";
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.roundRect(feeX, feeY, feeW, feeH, 22);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = "#ff3b4b";
+  ctx.font = '850 20px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.fillText("PER PERSON", feeX + 28, feeY + 44);
+
+  // Red currency symbol, white amount.
+  const currencySymbol = perPersonText.startsWith("৳") ? "৳" : "";
+  const amountBody = currencySymbol ? perPersonText.slice(1) : perPersonText;
+  ctx.fillStyle = "#ff3344";
+  ctx.font = '900 58px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.fillText(currencySymbol, feeX + 28, feeY + 106);
+  const symbolWidth = ctx.measureText(currencySymbol).width;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(amountBody, feeX + 28 + symbolWidth + 6, feeY + 106);
+
+  if (reminder.countdownText && !reminder.isPast) {
+    ctx.fillStyle = "#f6eef0";
+    const fittedCountdown = fitText(`⏱  ${reminder.countdownText}`, heroW - 84, 650, 19, 16);
+    ctx.font = fittedCountdown.font;
+    ctx.fillText(fittedCountdown.value, heroX + 42, heroY + heroH - 24);
+  }
+
+  // Keep the lower section clean: no large football graphic or ball-related effects.
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = '850 29px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.textAlign = "center";
+  ctx.fillText("SEE YOU ON THE FIELD ⚽", width / 2, 930);
+  ctx.fillStyle = "#a98f94";
+  ctx.font = '650 15px Inter, "Noto Sans Bengali", "Noto Sans", system-ui, sans-serif';
+  ctx.fillText("TURFCLUB • MATCH NIGHT REMINDER", width / 2, 966);
+  ctx.textAlign = "left";
+
+  return canvas;
+};
 
 // Option A calculation boundary: completed matches keep permanent records;
 // only the first match that has not finished yet is active. Later matches are frozen.
@@ -966,10 +1412,14 @@ function Matches({
   // Match numbers are permanent chronological positions: earliest match is #1,
   // and a second match on the same date comes after the first one.
   const orderedMatches = getMatchOrder(matches);
+  const cashData = useMemo(() => getCashOverviewData(matches, players), [matches, players]);
   const [clock, setClock] = useState(() => new Date());
   const [showCreate, setShowCreate] = useState(false);
   const [editMatch, setEditMatch] = useState(null);
   const [reminderMatch, setReminderMatch] = useState(null);
+  const [scheduleImageOpen, setScheduleImageOpen] = useState(false);
+  const [scheduleNotice, setScheduleNotice] = useState("");
+  const [cashOverviewOpen, setCashOverviewOpen] = useState(false);
   const [matchPickerOpen, setMatchPickerOpen] = useState(false);
   const [matchSearch, setMatchSearch] = useState("");
 
@@ -1023,6 +1473,21 @@ function Matches({
     if (next) setSelectedMatchId(next.id);
   };
 
+  const showScheduleNotice = (message) => {
+    setScheduleNotice(message);
+    window.clearTimeout(showScheduleNotice.timer);
+    showScheduleNotice.timer = window.setTimeout(() => setScheduleNotice(""), 2400);
+  };
+
+  const openScheduleImage = () => {
+    const latest = getUpcomingMatches(matches, new Date());
+    if (!latest.length) {
+      showScheduleNotice("No upcoming matches to preview.");
+      return;
+    }
+    setScheduleImageOpen(true);
+  };
+
   const removeMatch = async (id) => {
     if (!confirm("Delete this match?")) return;
     try {
@@ -1048,11 +1513,27 @@ function Matches({
             Live Firebase data with previous and current balance side-by-side.
           </p>
         </div>
-        {isAdmin && (
-          <button className="round-primary" onClick={() => setShowCreate(true)}>
-            <Plus size={21} />
+        <div className="match-hero-actions">
+          <button
+            type="button"
+            className="schedule-action"
+            onClick={openScheduleImage}
+            title="Preview upcoming schedule image"
+          >
+            <ClipboardList size={15} />
+            <span>SCHEDULE IMAGE</span>
           </button>
-        )}
+          {isAdmin && (
+            <button
+              className="round-primary"
+              onClick={() => setShowCreate(true)}
+              aria-label="Create match"
+              title="Create match"
+            >
+              <Plus size={21} />
+            </button>
+          )}
+        </div>
       </div>
       <div className="date-strip-wrap">
         <div className="date-strip">
@@ -1182,11 +1663,42 @@ function Matches({
           countdown={isNextMatch ? formatCountdown(matchStart, clock) : ""}
         />
       )}
+      {isAdmin && (
+        <button
+          type="button"
+          className="player-ledger-launch cash-overview-launch"
+          onClick={() => setCashOverviewOpen(true)}
+          aria-label="Open cash overview"
+        >
+          <div>
+            <span className="eyebrow">CASH OVERVIEW</span>
+            <b>Club cash</b>
+            <small>Collections & match costs</small>
+          </div>
+          <ChevronRight size={19} />
+        </button>
+      )}
       {reminderMatch && (
         <ReminderModal
           match={reminderMatch}
           onClose={() => setReminderMatch(null)}
         />
+      )}
+      {scheduleImageOpen && (
+        <UpcomingScheduleImageModal
+          matches={matches}
+          onClose={() => setScheduleImageOpen(false)}
+          onNotice={showScheduleNotice}
+        />
+      )}
+      {cashOverviewOpen && (
+        <CashOverviewScreen
+          data={cashData}
+          onClose={() => setCashOverviewOpen(false)}
+        />
+      )}
+      {scheduleNotice && (
+        <div className="schedule-toast" role="status">{scheduleNotice}</div>
       )}
       {showCreate && (
         <MatchModal
@@ -1763,13 +2275,135 @@ function buildReminderMessage(match, now = new Date()) {
   const timeText = timeLabel(match.startTime || match.time);
   const matchup = getMatchupLabel(match);
   const location = String(match.location || "Turf field").trim() || "Turf field";
+  const perPerson = match.participants?.length
+    ? Number(match.totalAmount || 0) / match.participants.length
+    : null;
+  const perPersonText = perPerson === null ? "N/A" : money(perPerson);
 
-  const lines = [status.messageTitle, "", matchup, "", `📅 ${dateText}`, `🕘 ${timeText}`, `📍 ${location}`];
+  const lines = [
+    status.messageTitle,
+    "",
+    matchup,
+    "",
+    `📅 ${dateText}`,
+    `🕘 ${timeText}`,
+    `📍 ${location}`,
+    ...(String(match.note || "").trim() ? [`📝 Note: ${String(match.note).trim()}`] : []),
+    `💰 Per Person: ${perPersonText}`,
+  ];
   if (status.isPast) lines.push("", "The match has already been played.");
   return {
     ...status,
     text: lines.join("\n"),
   };
+}
+
+function UpcomingScheduleImageModal({ matches, onClose, onNotice }) {
+  useBodyScrollLock(true);
+  useEscapeHandler(true, onClose);
+  const [imageSrc, setImageSrc] = useState("");
+  const [clock, setClock] = useState(() => new Date());
+  const [copied, setCopied] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
+  const upcoming = useMemo(() => getUpcomingMatches(matches, clock), [matches, clock]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const canvas = buildUpcomingScheduleImage(matches, clock);
+    setImageSrc(canvas.toDataURL("image/png"));
+  }, [matches, clock]);
+
+  const copySchedule = async () => {
+    const latest = buildUpcomingScheduleMessage(matches, new Date());
+    if (!latest.matches.length) {
+      onNotice("No upcoming matches to copy.");
+      return;
+    }
+    const success = await copyTextToClipboard(latest.text);
+    if (!success) {
+      onNotice("Could not copy the schedule.");
+      return;
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  };
+
+  const downloadImage = () => {
+    const canvas = buildUpcomingScheduleImage(matches, new Date());
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        onNotice("Could not generate the image.");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "turfclub-upcoming-matches.png";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDownloaded(true);
+      window.setTimeout(() => setDownloaded(false), 1800);
+    }, "image/png");
+  };
+
+  return (
+    <OverlayPortal>
+      <div className="modal-backdrop">
+        <div className="modal schedule-image-modal">
+          <div className="modal-head">
+            <div>
+              <span className="eyebrow">TURFCLUB SHARE</span>
+              <h2>Upcoming Schedule</h2>
+              <p className="muted reminder-subtitle">
+                {upcoming.length} upcoming match{upcoming.length === 1 ? "" : "es"}
+              </p>
+            </div>
+            <button
+              className="icon-btn"
+              onClick={onClose}
+              aria-label="Close schedule image preview"
+            >
+              <X />
+            </button>
+          </div>
+          <div className="schedule-image-preview">
+            {imageSrc ? (
+              <img
+                src={imageSrc}
+                alt="TurfClub upcoming matches schedule preview"
+              />
+            ) : (
+              <div className="schedule-image-loading">Preparing image…</div>
+            )}
+          </div>
+          <div className="schedule-image-actions">
+            <button
+              type="button"
+              className={`primary schedule-modal-action ${copied ? "copied" : ""}`}
+              onClick={copySchedule}
+              disabled={copied}
+            >
+              {copied ? <><Check size={16} /> Copied</> : <><Copy size={16} /> Copy</>}
+            </button>
+            <button
+              type="button"
+              className={`primary schedule-modal-action ${downloaded ? "downloaded" : ""}`}
+              onClick={downloadImage}
+              disabled={downloaded}
+            >
+              {downloaded ? <><Check size={16} /> Downloaded</> : <><Download size={16} /> Download</>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </OverlayPortal>
+  );
 }
 
 function ReminderModal({ match, onClose }) {
@@ -1788,23 +2422,10 @@ function ReminderModal({ match, onClose }) {
 
   const copyReminder = async () => {
     const latestReminder = buildReminderMessage(match, new Date());
-    try {
-      await navigator.clipboard.writeText(latestReminder.text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch {
-      const helper = document.createElement("textarea");
-      helper.value = latestReminder.text;
-      helper.style.position = "fixed";
-      helper.style.opacity = "0";
-      document.body.appendChild(helper);
-      helper.focus();
-      helper.select();
-      document.execCommand("copy");
-      document.body.removeChild(helper);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    }
+    const ok = await copyTextToClipboard(latestReminder.text);
+    if (!ok) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
   };
 
   return (
@@ -1832,11 +2453,128 @@ function ReminderModal({ match, onClose }) {
               <span className="reminder-type">{reminder.icon} CURRENT REMINDER</span>
             </div>
             <pre>{reminder.text}</pre>
-            <button className={`primary full copy-reminder ${copied ? "copied" : ""}`} onClick={copyReminder}>
-              {copied ? <><Check size={16} /> COPIED</> : <><ClipboardList size={16} /> COPY REMINDER</>}
-            </button>
+            <div className="reminder-action-row">
+              <button className={`primary copy-reminder ${copied ? "copied" : ""}`} onClick={copyReminder}>
+                {copied ? <><Check size={16} /> COPIED</> : <><ClipboardList size={16} /> Copy</>}
+              </button>
+              <button
+                className="primary reminder-download"
+                onClick={() => {
+                  const canvas = buildReminderImage(match, new Date());
+                  canvas.toBlob((blob) => {
+                    if (!blob) return;
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = "turfclub-match-reminder.png";
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }, "image/png");
+                }}
+              >
+                <Download size={16} /> Download
+              </button>
+            </div>
           </article>
         </div>
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function MatchPlayerSelector({ players, selected, onToggle, onClose }) {
+  useBodyScrollLock(true);
+  useEscapeHandler(true, onClose);
+  const [search, setSearch] = useState("");
+  const activeSelected = useMemo(() => new Set(selected), [selected]);
+  const filteredPlayers = useMemo(() => {
+    const normalized = search.trim().toLowerCase();
+    const list = sortPlayersByName(
+      (Array.isArray(players) ? players : []).filter(
+        (player) => isPlayerActive(player) || activeSelected.has(player.id),
+      ),
+    );
+    if (!normalized) return list;
+    return list.filter((player) =>
+      `${player.name || ""} ${playerPositionLabel(player)}`.toLowerCase().includes(normalized),
+    );
+  }, [players, search, activeSelected]);
+
+  return (
+    <OverlayPortal>
+      <div className="modal-backdrop player-selector-backdrop">
+        <section className="modal player-selector-modal" role="dialog" aria-modal="true" aria-labelledby="select-players-title">
+          <div className="modal-head player-selector-head">
+            <div>
+              <span className="eyebrow">SELECT PLAYERS</span>
+              <h2 id="select-players-title">Choose players</h2>
+              <p className="muted">{selected.length} {selected.length === 1 ? "player" : "players"} selected</p>
+            </div>
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close player selection">
+              <X />
+            </button>
+          </div>
+
+          <div className="player-selector-summary">
+            <Users size={16} />
+            <strong>{selected.length} {selected.length === 1 ? "player" : "players"} selected</strong>
+          </div>
+
+          <div className="player-search player-selector-search">
+            <Search size={15} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search player..."
+              aria-label="Search player"
+              autoFocus
+            />
+            {search && (
+              <button type="button" className="search-clear" onClick={() => setSearch("")} aria-label="Clear player search">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          <div className="player-selector-list">
+            {filteredPlayers.map((player) => {
+              const isSelected = activeSelected.has(player.id);
+              return (
+                <button
+                  type="button"
+                  className={`player-selector-row ${isSelected ? "selected" : ""}`}
+                  key={player.id}
+                  onClick={() => onToggle(player.id)}
+                  aria-pressed={isSelected}
+                >
+                  <span className={`player-selector-check ${isSelected ? "checked" : ""}`} aria-hidden="true">
+                    {isSelected && <Check size={14} />}
+                  </span>
+                  <PlayerAvatar player={player} size="sm" />
+                  <span className="player-selector-name">
+                    <b>{player.name}</b>
+                    <small>{playerPositionLabel(player)}</small>
+                  </span>
+                </button>
+              );
+            })}
+            {!filteredPlayers.length && (
+              <div className="empty player-selector-empty">
+                <Search size={18} />
+                <h3>No players found</h3>
+                <p>Try another player name.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="player-selector-footer">
+            <button type="button" className="primary full" onClick={onClose}>
+              Submit
+            </button>
+          </div>
+        </section>
       </div>
     </OverlayPortal>
   );
@@ -1848,26 +2586,23 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
 
   const editing = !!match;
   const [date, setDate] = useState(match?.date || today());
-  const [startTime, setStartTime] = useState(
-    match?.startTime || match?.time || currentTime(),
-  );
-  const [endTime, setEndTime] = useState(
-    match?.endTime ||
-    addOneHour(match?.startTime || match?.time || currentTime()),
-  );
+  const [startTime, setStartTime] = useState(match?.startTime || match?.time || currentTime());
+  const [endTime, setEndTime] = useState(match?.endTime || addOneHour(match?.startTime || match?.time || currentTime()));
   const [amount, setAmount] = useState(String(match?.totalAmount ?? 0));
   const [teamAName, setTeamAName] = useState(match?.teamAName || "Team A");
   const [teamBName, setTeamBName] = useState(match?.teamBName || "Team B");
   const [location, setLocation] = useState(match?.location || "");
-  const [selected, setSelected] = useState(
-    match?.participants?.map((p) => p.playerId) || [],
-  );
+  const [note, setNote] = useState(String(match?.note || "").slice(0, 20));
+  const [selected, setSelected] = useState(match?.participants?.map((p) => p.playerId) || []);
+  const [playerSelectorOpen, setPlayerSelectorOpen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const toggle = (id) =>
-    setSelected((s) =>
-      s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
+
+  const toggle = (id) => {
+    setSelected((current) =>
+      current.includes(id) ? current.filter((x) => x !== id) : [...current, id],
     );
+  };
 
   const submit = async (event) => {
     event?.preventDefault?.();
@@ -1880,6 +2615,7 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
     if (!validDate || !validTime(startTime) || !validTime(endTime) || !validMoney || !Number.isFinite(numericAmount) || numericAmount <= 0 || selected.length === 0) {
       return setError("Enter a valid date, time, positive amount (up to 3 decimals), and at least one player.");
     }
+    const sanitizedNote = String(note || "").trim().slice(0, 20);
     const old = Array.isArray(match?.participants) ? match.participants : [];
     const participants = [...new Set(selected)].map((id) => ({
       playerId: id,
@@ -1897,6 +2633,7 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
           teamAName: teamAName.trim() || "Team A",
           teamBName: teamBName.trim() || "Team B",
           location: location.trim(),
+          note: sanitizedNote,
           participants,
           updatedAt: serverTimestamp(),
         });
@@ -1911,6 +2648,7 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
           teamAName: teamAName.trim() || "Team A",
           teamBName: teamBName.trim() || "Team B",
           location: location.trim(),
+          note: sanitizedNote,
           participants,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1927,128 +2665,114 @@ function MatchModal({ players, match, onClose, setAppError, onDone }) {
   };
 
   return (
-    <OverlayPortal>
-      <div className="modal-backdrop">
-        <form className="modal match-modal" onSubmit={submit} noValidate>
-          <div className="modal-head">
-            <div>
-              <span className="eyebrow">
-                {editing ? "EDIT MATCH" : "NEW MATCH"}
-              </span>
-              <h2>{editing ? "Update match" : "Create match"}</h2>
+    <>
+      <OverlayPortal>
+        <div className="modal-backdrop">
+          <form className="modal match-modal create-match-modal" onSubmit={submit} noValidate>
+            <div className="modal-head">
+              <div>
+                <span className="eyebrow">{editing ? "EDIT MATCH" : "NEW MATCH"}</span>
+                <h2>{editing ? "Update match" : "Create match"}</h2>
+              </div>
+              <button type="button" className="icon-btn" onClick={onClose} aria-label="Close match dialog">
+                <X />
+              </button>
             </div>
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close admin login">
-              <X />
-            </button>
-          </div>
-          <div className="form-grid-two">
+
             <label>
               Match date
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-              />
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
-            <label>
-              Start time
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-              />
-            </label>
-          </div>
-          <label>
-            End time
-            <input
-              type="time"
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-            />
-          </label>
-          <div className="form-grid-two">
+
+            <div className="form-grid-two time-range-row">
+              <label>
+                Start time
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+              </label>
+              <div className="time-range-separator" aria-hidden="true">TO</div>
+              <label>
+                End time
+                <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+              </label>
+            </div>
+
             <label>
               Team A name
-              <input
-                type="text"
-                value={teamAName}
-                onChange={(e) => setTeamAName(e.target.value)}
-                maxLength={40}
-                placeholder="Team A"
-              />
+              <input type="text" value={teamAName} onChange={(e) => setTeamAName(e.target.value)} maxLength={40} placeholder="Team A" />
             </label>
+
             <label>
               Team B name
-              <input
-                type="text"
-                value={teamBName}
-                onChange={(e) => setTeamBName(e.target.value)}
-                maxLength={40}
-                placeholder="Team B"
-              />
+              <input type="text" value={teamBName} onChange={(e) => setTeamBName(e.target.value)} maxLength={40} placeholder="Team B" />
             </label>
-          </div>
-          <label className="location-field">
-            Turf field location
-            <span className="input-with-icon">
-              <MapPin size={15} aria-hidden="true" />
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g. Bashundhara Turf, Dhaka"
-                maxLength={120}
-                autoComplete="street-address"
-              />
-            </span>
-            <small className="field-hint">Add the venue so everyone knows where to play.</small>
-          </label>
-          <label>
-            Total match amount
-            <input
-              type="number"
-              min="0"
-              inputMode="decimal"
-              value={amount}
-              onFocus={() => { if (amount === "0") setAmount(""); }}
-              onChange={(e) => setAmount(normalizeNumericInput(e.target.value))}
-              placeholder="0"
-            />
-          </label>
-          <div className="selection-head">
-            <b>Select players</b>
-            <span>{selected.length} selected</span>
-          </div>
-          <div className="select-list">
-            {sortPlayersByName(players.filter((p) => isPlayerActive(p) || selected.includes(p.id))).map((p) => (
-              <button
-                type="button"
-                className={`select-player ${selected.includes(p.id) ? "selected" : ""}`}
-                key={p.id}
-                onClick={() => toggle(p.id)}
-              >
-                <PlayerAvatar player={p} size="sm" />
-                <span>{p.name}</span>
-                {selected.includes(p.id) && <Check size={17} />}
-              </button>
-            ))}
-          </div>
-          {selected.length > 0 && Number(amount) > 0 && (
-            <div className="per-preview">
-              Average share <b>{money(Number(amount) / selected.length)}</b>
+
+            <label className="location-field">
+              Turf / location
+              <span className="input-with-icon">
+                <MapPin size={15} aria-hidden="true" />
+                <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Bashundhara Turf, Dhaka" maxLength={120} autoComplete="street-address" />
+              </span>
+            </label>
+
+            <div className="form-grid-two amount-row">
+              <label>
+                Amount
+                <input
+                  type="number"
+                  min="0"
+                  inputMode="decimal"
+                  value={amount}
+                  onFocus={() => { if (amount === "0") setAmount(""); }}
+                  onChange={(e) => setAmount(normalizeNumericInput(e.target.value))}
+                  placeholder="0"
+                />
+              </label>
+              <label>
+                Note
+                <input
+                  type="text"
+                  value={note}
+                  maxLength={20}
+                  onChange={(e) => setNote(e.target.value.slice(0, 20))}
+                  placeholder="Optional note"
+                  autoComplete="off"
+                />
+                <span className="match-note-meta">Optional · {note.length}/20</span>
+              </label>
             </div>
-          )}
-          {error && <div className="error">{error}</div>}
-          <button className="primary full" type="submit" disabled={busy}>
-            {busy ? "Saving..." : editing ? "Save changes" : "Create match"}
-          </button>
-        </form>
-      </div>
-    </OverlayPortal>
+
+            <button type="button" className="player-selector-trigger" onClick={() => setPlayerSelectorOpen(true)} aria-haspopup="dialog" aria-expanded={playerSelectorOpen}>
+              <span className="player-selector-trigger-icon"><Users size={17} /></span>
+              <span className="player-selector-trigger-copy">
+                <strong>Select players</strong>
+                <small>{selected.length} {selected.length === 1 ? "player" : "players"} selected</small>
+              </span>
+              <ChevronRight size={18} aria-hidden="true" />
+            </button>
+
+            {selected.length > 0 && Number(amount) > 0 && (
+              <div className="per-preview">
+                Average share <b>{money(Number(amount) / selected.length)}</b>
+              </div>
+            )}
+            {error && <div className="error">{error}</div>}
+            <button className="primary full create-match-submit" type="submit" disabled={busy}>
+              {busy ? "Saving..." : editing ? "Save changes" : "Create match"}
+            </button>
+          </form>
+        </div>
+      </OverlayPortal>
+      {playerSelectorOpen && (
+        <MatchPlayerSelector
+          players={players}
+          selected={selected}
+          onToggle={toggle}
+          onClose={() => setPlayerSelectorOpen(false)}
+        />
+      )}
+    </>
   );
 }
-
 
 function resultCompletedMatches(matches, now = new Date()) {
   return getMatchOrder(matches)
@@ -2460,6 +3184,103 @@ function ResultDetailModal({ match, players, isAdmin, onClose, setAppError }) {
 
 const isPlayerActive = (player) => player?.active !== false;
 
+
+function getDuePlayerBreakdowns(players, matches, balances) {
+  const orderedMatches = getMatchOrder(Array.isArray(matches) ? matches : []);
+  const matchNumbers = new Map(
+    orderedMatches.map((match, index) => [String(match?.id || index), index + 1]),
+  );
+  const matchRank = new Map(
+    orderedMatches.map((match, index) => [String(match?.id || index), index]),
+  );
+
+  return (Array.isArray(players) ? players : [])
+    .filter((player) => isPlayerActive(player))
+    .map((player) => {
+      const balance = Number(balances?.[player.id] || 0);
+      if (!(balance < 0)) return null;
+
+      const financials = getPlayerFinancials(matches, player.id, isMatchCompleted);
+      const rows = [...(financials.rows || [])]
+        .map((row, fallbackIndex) => ({
+          ...row,
+          _matchId: String(row?.match?.id || fallbackIndex),
+          _rank: matchRank.get(String(row?.match?.id || fallbackIndex)) ?? Number.MAX_SAFE_INTEGER,
+        }))
+        .sort((a, b) => a._rank - b._rank);
+
+      // Allocate the running negative balance into chronological debt lots.
+      // This mirrors the existing balance model: match fee creates debt and
+      // recorded payment reduces the running balance. Positive net rows settle
+      // older outstanding lots first, without introducing a new data source.
+      const debtLots = [];
+      let creditMinor = 0;
+      rows.forEach((row) => {
+        let netMinor = Number(row?.matchBalanceMinor || 0);
+        if (!Number.isFinite(netMinor) || netMinor === 0) return;
+
+        if (netMinor < 0) {
+          let newDebt = Math.abs(Math.trunc(netMinor));
+          let availableCredit = creditMinor;
+          if (availableCredit > 0) {
+            const applied = Math.min(availableCredit, newDebt);
+            availableCredit -= applied;
+            newDebt -= applied;
+            creditMinor = availableCredit;
+          }
+          if (newDebt > 0) {
+            debtLots.push({
+              match: row.match,
+              matchId: row._matchId,
+              amountMinor: newDebt,
+              matchNumber: matchNumbers.get(row._matchId) || row._rank + 1,
+            });
+          }
+          return;
+        }
+
+        let remainingCredit = Math.max(0, Math.trunc(netMinor));
+        for (const lot of debtLots) {
+          if (remainingCredit <= 0) break;
+          const applied = Math.min(lot.amountMinor, remainingCredit);
+          lot.amountMinor -= applied;
+          remainingCredit -= applied;
+        }
+        creditMinor += remainingCredit;
+      });
+
+      let remainingDueMinor = Math.abs(Math.round(balance * 1000));
+      const breakdown = debtLots
+        .filter((lot) => lot.amountMinor > 0)
+        .map((lot) => {
+          const amountMinor = Math.min(lot.amountMinor, remainingDueMinor);
+          remainingDueMinor -= amountMinor;
+          return {
+            match: lot.match,
+            matchNumber: lot.matchNumber,
+            amount: amountMinor / 1000,
+          };
+        })
+        .filter((row) => row.amount > 0);
+
+      // Defensive reconciliation keeps displayed source rows tied exactly to
+      // the authoritative current negative balance, even with legacy rounding.
+      if (remainingDueMinor > 0 && breakdown.length) {
+        const last = breakdown[breakdown.length - 1];
+        last.amount += remainingDueMinor / 1000;
+      }
+
+      return {
+        player,
+        balance,
+        due: Math.abs(balance),
+        breakdown,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.due - a.due || String(a.player?.name || "").localeCompare(String(b.player?.name || "")));
+}
+
 function Players({ players, matches, profile, setAppError, onOpenPlayer }) {
   const isAdmin = profile.role === "admin";
   const [newName, setNewName] = useState("");
@@ -2501,14 +3322,13 @@ function Players({ players, matches, profile, setAppError, onOpenPlayer }) {
 
   const activePlayerCount = players.filter(isPlayerActive).length;
   const archivedPlayerCount = players.length - activePlayerCount;
-
   const balances = useMemo(
     () =>
       Object.fromEntries(
-        players.map((p) => {
-          const financials = getPlayerFinancials(matches, p.id, isMatchCompleted);
-          return [p.id, financials.balanceMinor / 1000];
-        }),
+        (Array.isArray(players) ? players : []).map((player) => [
+          player.id,
+          getPlayerFinancials(matches, player.id, isMatchCompleted).balanceMinor / 1000,
+        ]),
       ),
     [players, matches],
   );
@@ -3634,133 +4454,405 @@ function PositionGuide() {
   );
 }
 
-function Account({ profile, players, matches, logout }) {
-  const [cashAuditOpen, setCashAuditOpen] = useState(null);
 
+function getCashOverviewData(matches, players) {
+  const orderedMatches = getMatchOrder(Array.isArray(matches) ? matches : []);
+  const playedMatches = [...orderedMatches]
+    .filter((match) => !match?.deleted && isMatchCompleted(match))
+    .reverse();
+
+  const matchNumbers = new Map(
+    orderedMatches.map((match, index) => [String(match?.id || index), index + 1]),
+  );
+  const playerOrder = new Map();
+  (Array.isArray(players) ? players : []).forEach((player, index) => {
+    playerOrder.set(String(player?.id || ""), index);
+  });
+  const playerMap = new Map(
+    (Array.isArray(players) ? players : []).map((player) => [
+      String(player?.id || ""),
+      player,
+    ]),
+  );
+
+  const currentBalances = Object.fromEntries(
+    (Array.isArray(players) ? players : []).map((player) => {
+      const financials = getPlayerFinancials(matches, player.id, isMatchCompleted);
+      return [player.id, financials.balanceMinor / 1000];
+    }),
+  );
+  const duePlayers = getDuePlayerBreakdowns(players, matches, currentBalances);
+
+  // Single source of truth for historical club cash:
+  // actual participant payments from completed matches minus those match costs.
+  const collectionGroups = [];
+  const costGroups = [];
+  let totalCollectedMinor = 0;
+  let totalCostMinor = 0;
+  let paymentCount = 0;
+
+  playedMatches.forEach((match, matchIndex) => {
+    const matchId = String(match?.id || `${matchIndex}`);
+    const matchNumber = matchNumbers.get(matchId) || matchIndex + 1;
+    const costMinor = Math.max(
+      0,
+      Math.round(finiteTaka(match?.totalAmount) * 1000),
+    );
+    totalCostMinor += costMinor;
+
+    costGroups.push({
+      id: matchId,
+      match,
+      matchNumber,
+      date: match?.date || "",
+      amount: costMinor / 1000,
+      matchup: getMatchupLabel(match),
+      parity: matchNumber % 2 === 0 ? "even" : "odd",
+    });
+
+    const participants = Array.isArray(match?.participants)
+      ? match.participants
+      : [];
+    const orderedParticipants = participants
+      .map((participant, participantIndex) => ({ participant, participantIndex }))
+      .filter(({ participant }) => Math.max(0, finiteTaka(participant?.paid)) > 0)
+      .sort((a, b) => {
+        const ai = playerOrder.has(String(a.participant?.playerId || ""))
+          ? playerOrder.get(String(a.participant?.playerId || ""))
+          : Number.MAX_SAFE_INTEGER;
+        const bi = playerOrder.has(String(b.participant?.playerId || ""))
+          ? playerOrder.get(String(b.participant?.playerId || ""))
+          : Number.MAX_SAFE_INTEGER;
+        return ai - bi || a.participantIndex - b.participantIndex;
+      });
+
+    const collectionSequenceStart = paymentCount;
+    const payments = orderedParticipants.map(({ participant }, index) => {
+      const amountMinor = Math.max(
+        0,
+        Math.round(finiteTaka(participant?.paid) * 1000),
+      );
+      totalCollectedMinor += amountMinor;
+      paymentCount += 1;
+      return {
+        matchId,
+        matchNumber,
+        date: match?.date || "",
+        playerId: String(participant?.playerId || ""),
+        playerName: String(
+          playerMap.get(String(participant?.playerId || ""))?.name ||
+            "Unknown player",
+        ),
+        amount: amountMinor / 1000,
+        sequence: collectionSequenceStart + index + 1,
+      };
+    });
+
+    collectionGroups.push({
+      id: matchId,
+      match,
+      matchNumber,
+      date: match?.date || "",
+      matchup: getMatchupLabel(match),
+      payments,
+      paymentCount: payments.length,
+      parity: matchNumber % 2 === 0 ? "even" : "odd",
+    });
+  });
+
+  return {
+    totalCollected: totalCollectedMinor / 1000,
+    totalCost: totalCostMinor / 1000,
+    cashInHand: (totalCollectedMinor - totalCostMinor) / 1000,
+    collectionMatchGroups: collectionGroups,
+    costMatchGroups: costGroups,
+    collectionPaymentCount: paymentCount,
+    playedMatchCount: playedMatches.length,
+    matchNumbers,
+    duePlayers,
+  };
+}
+
+
+function CashOverviewDuePlayers({ duePlayers = [] }) {
+  const totalDue = duePlayers.reduce((sum, item) => sum + item.due, 0);
+
+  return (
+    <section className="due-players-card cash-overview-due" aria-labelledby="cash-due-players-title">
+      <div className="due-players-head">
+        <div>
+          <div className="eyebrow" id="cash-due-players-title">DUE PLAYERS</div>
+          <h3>Outstanding player balances</h3>
+          <p>{duePlayers.length ? `${duePlayers.length} ${duePlayers.length === 1 ? "player" : "players"}` : "Everyone is settled"}</p>
+        </div>
+        <div className="due-players-total">
+          <span>TOTAL DUE</span>
+          <strong>{money(totalDue)}</strong>
+        </div>
+      </div>
+
+      {duePlayers.length ? (
+        <div className="due-player-list">
+          {duePlayers.map(({ player, due, breakdown }) => (
+            <div className="due-player-row" key={player.id}>
+              <div className="due-player-main">
+                <div className="due-player-name">
+                  <b>{player.name}</b>
+                  <span>Outstanding balance</span>
+                </div>
+                <strong className="due-player-amount">{money(due)}</strong>
+              </div>
+              <div className="due-player-sources">
+                {breakdown.map((source) => (
+                  <div
+                    className="due-player-source"
+                    key={`${player.id}-${source.match?.id || source.matchNumber}`}
+                  >
+                    <span>
+                      Match {source.matchNumber} <i>•</i>{" "}
+                      {source.match?.date ? dateLabel(source.match.date) : "—"}
+                      {getMatchupLabel(source.match) ? (
+                        <small>{getMatchupLabel(source.match)}</small>
+                      ) : null}
+                    </span>
+                    <b>{money(source.amount)}</b>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="due-players-empty">
+          <Check size={17} aria-hidden="true" />
+          <span>Everyone is settled</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CashOverviewSummary({
+  data,
+  onOpenCollection,
+  onOpenCost,
+  title = "CASH OVERVIEW",
+  subtitle = "Club cash",
+}) {
+  const balanceState =
+    data.cashInHand > 0
+      ? "positive"
+      : data.cashInHand < 0
+        ? "negative"
+        : "neutral";
+
+  return (
+    <section className="account-cash-overview" aria-labelledby="cash-overview-title">
+      <div className="account-cash-heading">
+        <span className="eyebrow" id="cash-overview-title">{title}</span>
+        <span>{subtitle}</span>
+      </div>
+      <div className="account-cash-grid">
+        <button
+          type="button"
+          className="account-cash-item account-cash-clickable"
+          onClick={onOpenCollection}
+          aria-haspopup="dialog"
+          aria-label={`View total collected details: ${money(data.totalCollected)}`}
+        >
+          <span className="account-cash-label">TOTAL COLLECTED</span>
+          <strong>{money(data.totalCollected)}</strong>
+          <small>Recorded payments <span aria-hidden="true">›</span></small>
+        </button>
+        <button
+          type="button"
+          className="account-cash-item account-cash-clickable"
+          onClick={onOpenCost}
+          aria-haspopup="dialog"
+          aria-label={`View total cost details: ${money(data.totalCost)}`}
+        >
+          <span className="account-cash-label">TOTAL COST</span>
+          <strong>{money(data.totalCost)}</strong>
+          <small>Played matches only <span aria-hidden="true">›</span></small>
+        </button>
+        <div className={`account-cash-item account-cash-hand ${balanceState}`}>
+          <span className="account-cash-label">CASH IN HAND</span>
+          <strong>{money(data.cashInHand)}</strong>
+          <small>Available after match costs</small>
+        </div>
+      </div>
+      <CashOverviewDuePlayers duePlayers={data.duePlayers} />
+    </section>
+  );
+}
+
+function CashAuditScreen({ data, auditType, onBack, backLabel = "Back to cash overview" }) {
+  const isCollection = auditType === "collection";
+  const auditTitle = isCollection ? "CASH COLLECTION" : "MATCH COST";
+  const auditTotal = isCollection ? data.totalCollected : data.totalCost;
+
+  useBodyScrollLock(true);
+  useEscapeHandler(true, onBack);
+
+  return (
+    <OverlayPortal>
+      <div className="account-cash-audit-screen">
+        <header className="account-cash-audit-screen-head">
+          <button
+            type="button"
+            className="account-cash-audit-back"
+            onClick={onBack}
+            aria-label={backLabel}
+            title={backLabel}
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div className="account-cash-audit-screen-title">
+            <span className="eyebrow">{auditTitle}</span>
+            <strong>{money(auditTotal)}</strong>
+            <p>
+              {isCollection
+                ? `${data.collectionPaymentCount} payments · ${data.playedMatchCount} played matches`
+                : `${data.costMatchGroups.length} played matches`}
+              <span> · Played matches only</span>
+            </p>
+          </div>
+        </header>
+
+        <main className="account-cash-audit-screen-content">
+          {isCollection ? (
+            data.collectionMatchGroups.length ? (
+              data.collectionMatchGroups.map((group) => (
+                <section
+                  className={`account-cash-match-group ${group.parity}`}
+                  key={`collection-group-${group.id}`}
+                >
+                  <div className="account-cash-match-group-head">
+                    <div>
+                      <span className="account-cash-match-label">MATCH {group.matchNumber}</span>
+                      <strong>{group.date ? dateLabel(group.date) : "DATE UNAVAILABLE"}</strong>
+                      <p>{group.matchup}</p>
+                    </div>
+                    <span className="account-cash-match-count">
+                      {group.paymentCount} {group.paymentCount === 1 ? "payment" : "payments"}
+                    </span>
+                  </div>
+                  <div className="account-cash-match-payments">
+                    {group.payments.length ? group.payments.map((row, index) => (
+                      <div
+                        className="account-cash-payment-row"
+                        key={`${row.matchId}-${row.playerId}-${index}`}
+                      >
+                        <span className="account-cash-audit-seq">
+                          {String(row.sequence).padStart(2, "0")}
+                        </span>
+                        <strong>{row.playerName}</strong>
+                        <span className="account-cash-payment-amount">{money(row.amount)}</span>
+                      </div>
+                    )) : (
+                      <div className="account-cash-match-empty">No payments recorded for this match.</div>
+                    )}
+                  </div>
+                </section>
+              ))
+            ) : (
+              <div className="account-cash-audit-empty">
+                <strong>NO COLLECTIONS</strong>
+                <p>No player payments have been recorded for played matches yet.</p>
+                <span>Total · {money(0)}</span>
+              </div>
+            )
+          ) : (
+            data.costMatchGroups.length ? (
+              data.costMatchGroups.map((group) => (
+                <section
+                  className={`account-cash-match-group ${group.parity}`}
+                  key={`cost-group-${group.id}`}
+                >
+                  <div className="account-cash-match-group-head">
+                    <div>
+                      <span className="account-cash-match-label">MATCH {group.matchNumber}</span>
+                      <strong>{group.date ? dateLabel(group.date) : "DATE UNAVAILABLE"}</strong>
+                      <p>{group.matchup}</p>
+                    </div>
+                    <span className="account-cash-payment-amount">{money(group.amount)}</span>
+                  </div>
+                </section>
+              ))
+            ) : (
+              <div className="account-cash-audit-empty">
+                <strong>NO MATCH COSTS</strong>
+                <p>No played matches have been recorded yet.</p>
+                <span>Total · {money(0)}</span>
+              </div>
+            )
+          )}
+        </main>
+
+        <footer className="account-cash-audit-screen-total">
+          <span>TOTAL</span>
+          <strong>{money(auditTotal)}</strong>
+        </footer>
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function CashOverviewScreen({ data, onClose }) {
+  const [screen, setScreen] = useState("summary");
+
+  useEscapeHandler(screen === "summary", onClose);
+  useBodyScrollLock(true);
+
+  if (screen !== "summary") {
+    return (
+      <CashAuditScreen
+        data={data}
+        auditType={screen}
+        onBack={() => setScreen("summary")}
+        backLabel="Back to cash overview"
+      />
+    );
+  }
+
+  return (
+    <OverlayPortal>
+      <div className="account-cash-audit-screen">
+        <header className="account-cash-audit-screen-head">
+          <button
+            type="button"
+            className="account-cash-audit-back"
+            onClick={onClose}
+            aria-label="Back to Match Centre"
+            title="Back to Match Centre"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div className="account-cash-audit-screen-title">
+            <span className="eyebrow">CASH OVERVIEW</span>
+            <strong>Club cash</strong>
+            <p>Played matches only</p>
+          </div>
+        </header>
+
+        <main className="account-cash-audit-screen-content cash-overview-screen-content">
+          <CashOverviewSummary
+            data={data}
+            onOpenCollection={() => setScreen("collection")}
+            onOpenCost={() => setScreen("cost")}
+            subtitle="Club cash"
+          />
+        </main>
+      </div>
+    </OverlayPortal>
+  );
+}
+
+function Account({ profile, players, logout }) {
   const aliPlayer = useMemo(
     () => players.find((player) => String(player?.name || "").trim().toLowerCase() === "ali") || null,
     [players],
   );
-
-  const orderedMatches = useMemo(
-    () => getMatchOrder(Array.isArray(matches) ? matches : []),
-    [matches],
-  );
-
-  const playedMatches = useMemo(
-    () => [...orderedMatches]
-      .filter((match) => !match?.deleted && isMatchCompleted(match))
-      .reverse(),
-    [orderedMatches],
-  );
-
-  const matchNumbers = useMemo(
-    () => new Map(orderedMatches.map((match, index) => [String(match?.id || index), index + 1])),
-    [orderedMatches],
-  );
-
-  const playerOrder = useMemo(() => {
-    const order = new Map();
-    players.forEach((player, index) => order.set(String(player?.id || ""), index));
-    return order;
-  }, [players]);
-
-  const playerMap = useMemo(
-    () => new Map(players.map((player) => [String(player?.id || ""), player])),
-    [players],
-  );
-
-  const {
-    totalCollected,
-    totalCost,
-    cashInHand,
-    collectionMatchGroups,
-    costMatchGroups,
-    collectionPaymentCount,
-  } = useMemo(() => {
-    // Club cash audit is historical cash only: actual participant payments
-    // from played matches, minus fixed match cost for those same matches.
-    const collectionGroups = [];
-    const costGroups = [];
-    let totalCollectedMinor = 0;
-    let totalCostMinor = 0;
-    let paymentCount = 0;
-
-    playedMatches.forEach((match, matchIndex) => {
-      const matchId = String(match?.id || `${matchIndex}`);
-      const matchNumber = matchNumbers.get(matchId) || matchIndex + 1;
-      const costMinor = Math.max(0, Math.round(finiteTaka(match?.totalAmount) * 1000));
-      totalCostMinor += costMinor;
-
-      const costGroup = {
-        id: matchId,
-        match,
-        matchNumber,
-        date: match?.date || "",
-        amount: costMinor / 1000,
-        matchup: getMatchupLabel(match),
-        parity: matchNumber % 2 === 0 ? "even" : "odd",
-      };
-      costGroups.push(costGroup);
-
-      const participants = Array.isArray(match?.participants) ? match.participants : [];
-      const orderedParticipants = participants
-        .map((participant, participantIndex) => ({ participant, participantIndex }))
-        .filter(({ participant }) => Math.max(0, finiteTaka(participant?.paid)) > 0)
-        .sort((a, b) => {
-          const ai = playerOrder.has(String(a.participant?.playerId || ""))
-            ? playerOrder.get(String(a.participant?.playerId || ""))
-            : Number.MAX_SAFE_INTEGER;
-          const bi = playerOrder.has(String(b.participant?.playerId || ""))
-            ? playerOrder.get(String(b.participant?.playerId || ""))
-            : Number.MAX_SAFE_INTEGER;
-          return ai - bi || a.participantIndex - b.participantIndex;
-        });
-
-      const collectionSequenceStart = paymentCount;
-      const payments = orderedParticipants.map(({ participant }, index) => {
-        const amountMinor = Math.max(0, Math.round(finiteTaka(participant?.paid) * 1000));
-        totalCollectedMinor += amountMinor;
-        paymentCount += 1;
-        return {
-          matchId,
-          matchNumber,
-          date: match?.date || "",
-          playerId: String(participant?.playerId || ""),
-          playerName: String(playerMap.get(String(participant?.playerId || ""))?.name || "Unknown player"),
-          amount: amountMinor / 1000,
-          sequence: collectionSequenceStart + index + 1,
-        };
-      });
-
-      collectionGroups.push({
-        id: matchId,
-        match,
-        matchNumber,
-        date: match?.date || "",
-        matchup: getMatchupLabel(match),
-        payments,
-        paymentCount: payments.length,
-        parity: matchNumber % 2 === 0 ? "even" : "odd",
-      });
-    });
-
-    return {
-      totalCollected: totalCollectedMinor / 1000,
-      totalCost: totalCostMinor / 1000,
-      cashInHand: (totalCollectedMinor - totalCostMinor) / 1000,
-      collectionMatchGroups: collectionGroups,
-      costMatchGroups: costGroups,
-      collectionPaymentCount: paymentCount,
-    };
-  }, [matchNumbers, playedMatches, playerMap, playerOrder]);
-
-  const balanceState = cashInHand > 0 ? "positive" : cashInHand < 0 ? "negative" : "neutral";
-  const auditTitle = cashAuditOpen === "collection" ? "CASH COLLECTION" : "MATCH COST";
-  const auditTotal = cashAuditOpen === "collection" ? totalCollected : totalCost;
-
-  useBodyScrollLock(Boolean(cashAuditOpen));
-  useEscapeHandler(Boolean(cashAuditOpen), () => setCashAuditOpen(null));
 
   return (
     <section className="page account-page">
@@ -3778,146 +4870,22 @@ function Account({ profile, players, matches, logout }) {
         </div>
       </div>
 
-      <section className="account-cash-overview" aria-labelledby="account-cash-title">
-        <div className="account-cash-heading">
-          <span className="eyebrow" id="account-cash-title">CASH OVERVIEW</span>
-          <span>Club cash</span>
-        </div>
-        <div className="account-cash-grid">
-          <button
-            type="button"
-            className="account-cash-item account-cash-clickable"
-            onClick={() => setCashAuditOpen("collection")}
-            aria-haspopup="dialog"
-            aria-label={`View total collected details: ${money(totalCollected)}`}
-          >
-            <span className="account-cash-label">TOTAL COLLECTED</span>
-            <strong>{money(totalCollected)}</strong>
-            <small>Recorded payments <span aria-hidden="true">›</span></small>
-          </button>
-          <button
-            type="button"
-            className="account-cash-item account-cash-clickable"
-            onClick={() => setCashAuditOpen("cost")}
-            aria-haspopup="dialog"
-            aria-label={`View total cost details: ${money(totalCost)}`}
-          >
-            <span className="account-cash-label">TOTAL COST</span>
-            <strong>{money(totalCost)}</strong>
-            <small>Played matches only <span aria-hidden="true">›</span></small>
-          </button>
-          <div className={`account-cash-item account-cash-hand ${balanceState}`}>
-            <span className="account-cash-label">CASH IN HAND</span>
-            <strong>{money(cashInHand)}</strong>
-            <small>Available after match costs</small>
-          </div>
-        </div>
-      </section>
-
-      <button className="danger-button" onClick={logout}>
-        <LogOut size={18} /> Sign out
-      </button>
-
-      {cashAuditOpen && (
-        <OverlayPortal>
-          <div className="account-cash-audit-screen">
-            <header className="account-cash-audit-screen-head">
-              <button
-                type="button"
-                className="account-cash-audit-back"
-                onClick={() => setCashAuditOpen(null)}
-                aria-label="Back to account"
-                title="Back to account"
-              >
-                <ChevronLeft size={20} />
-              </button>
-              <div className="account-cash-audit-screen-title">
-                <span className="eyebrow">{auditTitle}</span>
-                <strong>{money(auditTotal)}</strong>
-                <p>
-                  {cashAuditOpen === "collection"
-                    ? `${collectionPaymentCount} payments · ${playedMatches.length} played matches`
-                    : `${costMatchGroups.length} played matches`}
-                  <span> · Played matches only</span>
-                </p>
-              </div>
-            </header>
-
-            <main className="account-cash-audit-screen-content">
-              {cashAuditOpen === "collection" ? (
-                collectionMatchGroups.length ? (
-                  collectionMatchGroups.map((group) => (
-                    <section
-                      className={`account-cash-match-group ${group.parity}`}
-                      key={`collection-group-${group.id}`}
-                    >
-                      <div className="account-cash-match-group-head">
-                        <div>
-                          <span className="account-cash-match-label">MATCH {group.matchNumber}</span>
-                          <strong>{group.date ? dateLabel(group.date) : "DATE UNAVAILABLE"}</strong>
-                          <p>{group.matchup}</p>
-                        </div>
-                        <span className="account-cash-match-count">
-                          {group.paymentCount} {group.paymentCount === 1 ? "payment" : "payments"}
-                        </span>
-                      </div>
-
-                      <div className="account-cash-match-payments">
-                        {group.payments.length ? group.payments.map((row, index) => (
-                          <div className="account-cash-payment-row" key={`${row.matchId}-${row.playerId}-${index}`}>
-                            <span className="account-cash-audit-seq">
-                              {String(row.sequence).padStart(2, "0")}
-                            </span>
-                            <strong>{row.playerName}</strong>
-                            <span className="account-cash-payment-amount">{money(row.amount)}</span>
-                          </div>
-                        )) : (
-                          <div className="account-cash-match-empty">No payments recorded for this match.</div>
-                        )}
-                      </div>
-                    </section>
-                  ))
-                ) : (
-                  <div className="account-cash-audit-empty">
-                    <strong>NO COLLECTIONS</strong>
-                    <p>No player payments have been recorded for played matches yet.</p>
-                    <span>Total · {money(0)}</span>
-                  </div>
-                )
-              ) : (
-                costMatchGroups.length ? (
-                  costMatchGroups.map((group) => (
-                    <section
-                      className={`account-cash-match-group ${group.parity}`}
-                      key={`cost-group-${group.id}`}
-                    >
-                      <div className="account-cash-match-group-head">
-                        <div>
-                          <span className="account-cash-match-label">MATCH {group.matchNumber}</span>
-                          <strong>{group.date ? dateLabel(group.date) : "DATE UNAVAILABLE"}</strong>
-                          <p>{group.matchup}</p>
-                        </div>
-                        <span className="account-cash-payment-amount">{money(group.amount)}</span>
-                      </div>
-                    </section>
-                  ))
-                ) : (
-                  <div className="account-cash-audit-empty">
-                    <strong>NO MATCH COSTS</strong>
-                    <p>No played matches have been recorded yet.</p>
-                    <span>Total · {money(0)}</span>
-                  </div>
-                )
-              )}
-            </main>
-
-            <footer className="account-cash-audit-screen-total">
-              <span>TOTAL</span>
-              <strong>{money(auditTotal)}</strong>
-            </footer>
-          </div>
-        </OverlayPortal>
-      )}
+      <div className="account-logout-wrap">
+        <button
+          type="button"
+          className="leave-pitch-button"
+          onClick={logout}
+          aria-label="Leave the pitch and sign out"
+          title="Leave the pitch"
+        >
+          <span className="leave-pitch-main">
+            <LogOut size={17} aria-hidden="true" />
+            <span>LEAVE THE PITCH</span>
+          </span>
+          <span className="leave-pitch-arrow" aria-hidden="true">→</span>
+        </button>
+        <p className="leave-pitch-microcopy">Until the next kickoff.</p>
+      </div>
     </section>
   );
 }
