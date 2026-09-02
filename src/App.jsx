@@ -1676,13 +1676,12 @@ function Matches({
           countdown={isNextMatch ? formatCountdown(matchStart, clock) : ""}
         />
       )}
-      {isAdmin && (
-        <button
-          type="button"
-          className="player-ledger-launch cash-overview-launch"
-          onClick={() => setCashOverviewOpen(true)}
-          aria-label="Open cash overview"
-        >
+      <button
+        type="button"
+        className="player-ledger-launch cash-overview-launch"
+        onClick={() => setCashOverviewOpen(true)}
+        aria-label="Open cash overview"
+      >
           <div>
             <span className="eyebrow">CASH OVERVIEW</span>
             <b>Club cash</b>
@@ -1690,7 +1689,6 @@ function Matches({
           </div>
           <ChevronRight size={19} />
         </button>
-      )}
       {reminderMatch && (
         <ReminderModal
           match={reminderMatch}
